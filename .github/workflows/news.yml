@@ -1,7 +1,8 @@
-name: Wallstreetcn Global Live to Discord
+name: Wallstreetcn US Stock to Discord
 
 on:
   workflow_dispatch:
+
   schedule:
     - cron: "*/5 * * * *"
 
@@ -24,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Fetch global live news and post
+      - name: Fetch US-stock live news and post
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python main.py
@@ -34,5 +35,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add seen.json
-          git diff --cached --quiet || git commit -m "Update Wallstreetcn global live state"
+          git diff --cached --quiet || git commit -m "Update Wallstreetcn US stock state"
           git push

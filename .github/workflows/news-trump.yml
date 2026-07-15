@@ -13,6 +13,7 @@ permissions:
 jobs:
   post-truths:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,11 +24,12 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install requests deep-translator
+        run: pip install requests deepl
 
       - name: Fetch Truth Social posts and post
         env:
           DISCORD_WEBHOOK_URL_TRUMP: ${{ secrets.DISCORD_WEBHOOK_URL_TRUMP }}
+          DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
         run: python trump_tracker.py
 
       - name: Save state

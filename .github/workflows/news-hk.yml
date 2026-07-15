@@ -1,4 +1,4 @@
-name: Wallstreetcn A-Stock to Discord
+name: Wallstreetcn H-Stock to Discord
 
 on:
   workflow_dispatch:

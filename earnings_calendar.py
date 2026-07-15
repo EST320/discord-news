@@ -16,7 +16,7 @@ DAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri")
 TIME_ORDER = {"bmo": 0, "amc": 1, "": 2}
 ICON_MAP = {"bmo": "☀️", "amc": "🌙"}
 MIN_MARKET_CAP = 5_000_000_000
-MAX_COMPANIES_PER_DAY = 25
+MAX_COMPANIES_PER_DAY = 15
 
 
 def get_week_range():
@@ -93,12 +93,15 @@ def format_cell(item):
 
 
 def build_chart(grouped, monday):
-    columns = list(zip_longest(*grouped.values(), fillvalue=None))
-    if not columns:
+    max_rows = max((len(v) for v in grouped.values()), default=0)
+    if max_rows == 0:
         return False
 
     header_vals = [f"{day} {(monday + timedelta(days=i)).strftime('%b %d')}" for i, day in enumerate(DAY_LABELS)]
-    cell_vals = [[format_cell(item) for item in col] for col in zip(*columns)]
+    cell_vals = [
+        [format_cell(item) for item in (day_items + [None] * (max_rows - len(day_items)))]
+        for day_items in grouped.values()
+    ]
 
     fig = go.Figure(data=[go.Table(
         columnwidth=[150] * len(DAY_LABELS),
@@ -122,12 +125,11 @@ def build_chart(grouped, monday):
     fig.update_layout(
         margin=dict(l=0, r=0, t=0, b=0),
         width=1050,
-        height=len(columns) * 56 + 38,
+        height=max_rows * 56 + 38,
     )
 
     fig.write_image(OUTPUT_FILE)
     return True
-
 
 def post_to_discord():
     with open(OUTPUT_FILE, "rb") as f:

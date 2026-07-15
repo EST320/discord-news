@@ -7,7 +7,7 @@ from pathlib import Path
 import requests
 
 API_URL = "https://api-prod.wallstreetcn.com/apiv1/content/lives"
-LIVE_URL = "https://wallstreetcn.com/live/global"
+LIVE_URL = "https://wallstreetcn.com/live/us-stock"
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
 
 STATE_FILE = Path("seen.json")

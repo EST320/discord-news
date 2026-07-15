@@ -2,7 +2,6 @@ name: Wallstreetcn US Stock to Discord
 
 on:
   workflow_dispatch:
-
   schedule:
     - cron: "*/5 * * * *"
 
@@ -12,7 +11,6 @@ permissions:
 jobs:
   post-live:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4

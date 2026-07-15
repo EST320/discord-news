@@ -61,9 +61,17 @@ def item_to_news(item):
 
     title = str(item.get("title", "")).strip()
     content = str(item.get("content_text", "")).strip()
+    content = re.sub(r"\s*[（(]来自华尔街见闻APP[）)]\s*$", "", content).strip()
 
     if not title:
-        title, content = (content[:120] or "华尔街见闻快讯"), content[120:]
+        bracket_match = re.match(r"^【([^】]+)】\s*", content)
+        if bracket_match:
+            title = bracket_match.group(1)
+            content = content[bracket_match.end():].strip()
+        else:
+            lines = content.split("\n", 1)
+            title = lines[0].strip() or "华尔街见闻快讯"
+            content = lines[1].strip() if len(lines) > 1 else ""
 
     title = re.sub(r"\s{2,}", " ", title.replace("\n", " ").replace("\r", " ")).strip()[:250]
     content = content[:3900]

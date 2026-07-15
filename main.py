@@ -40,7 +40,7 @@ def load_state():
 
 
 def save_state(state):
-    state["seen_ids"] = state["seen_ids"][-10000:]
+    state["seen_ids"] = state["seen_ids"][-1000:]
     STATE_FILE.write_text(
         json.dumps(state, ensure_ascii=False, indent=2),
         encoding="utf-8",

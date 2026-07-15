@@ -150,8 +150,8 @@ def post_to_discord(news):
     if news["content"]:
         text += f"\n{news['content']}"
 
-    # Discord Embed field value 最大 1024 字符
-    text = text[:1024]
+    # Discord Embed field value 最大 4096 字符
+    text = text[:4096]
 
     embed = {
         "color": 5793266,
@@ -159,13 +159,7 @@ def post_to_discord(news):
             "name": "wallstreetcn · us-stock",
             "url": LIVE_URL,
         },
-        "fields": [
-            {
-                "name": "\u200b",
-                "value": text,
-                "inline": False,
-            }
-        ],
+        "description": text,
     }
 
     if news["timestamp"]:

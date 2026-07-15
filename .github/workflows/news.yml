@@ -1,7 +1,8 @@
 name: Wallstreetcn US Stock to Discord
 
-"on":
+on:
   workflow_dispatch:
+
   schedule:
     - cron: "*/5 * * * *"
 

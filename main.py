@@ -88,6 +88,10 @@ def item_to_news(item):
         title = content[:120] if content else "华尔街见闻快讯"
         content = content[120:] if len(content) > 120 else ""
 
+    # 标题必须是单行，否则会破坏 Markdown 链接语法 [标题](链接)
+    title = title.replace("\r\n", " ").replace("\n", " ").replace("\r", " ").strip()
+    title = re.sub(r"\s{2,}", " ", title)
+
     # Discord Embed 的 title 最大 256 字符、description 最大 4096 字符
     title = title[:250]
     content = content[:3900]
@@ -105,7 +109,6 @@ def item_to_news(item):
         "content": content,
         "timestamp": timestamp,
     }
-
 
 def collect_new_items(seen_ids):
     seen_set = set(seen_ids)
@@ -144,7 +147,10 @@ def collect_new_items(seen_ids):
 
 
 def post_to_discord(news):
-    headline_link = f"[{news['title']}]({LIVE_URL})"
+    safe_title = news["title"].replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    safe_title = re.sub(r"\s{2,}", " ", safe_title).strip()
+
+    headline_link = f"[{safe_title}]({LIVE_URL})"
 
     text = headline_link
 

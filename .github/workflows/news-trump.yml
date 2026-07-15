@@ -1,0 +1,44 @@
+name: Trump Truth Social Tracker to Discord
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: trump-truth-tracker
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  post-truths:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Fetch Truth Social posts and post
+        env:
+          DISCORD_WEBHOOK_URL_TRUMP: ${{ secrets.DISCORD_WEBHOOK_URL_TRUMP }}
+        run: python trump_tracker.py
+
+      - name: Save state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add seen_trump.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Update Trump tracker state"
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main && git push && exit 0
+            sleep $((RANDOM % 5 + 1))
+          done
+          exit 1

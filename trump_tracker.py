@@ -16,6 +16,7 @@ FIRST_RUN_SEND = 10
 DISCORD_DELAY_SECONDS = 0.55
 RETENTION_SECONDS = 7 * 24 * 3600
 
+AVATAR_URL = "https://static.truthsocial.com/logo-icon.png"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 
@@ -41,6 +42,18 @@ def fetch_posts():
     return data if isinstance(data, list) else data.get("posts", [])
 
 
+def extract_media_url(item):
+    media = item.get("media")
+    if not media:
+        return None
+    first = media[0]
+    if isinstance(first, str):
+        return first
+    if isinstance(first, dict):
+        return first.get("url") or first.get("preview_url")
+    return None
+
+
 def post_to_news(item):
     post_id = str(item.get("id", "")).strip()
     if not post_id:
@@ -48,7 +61,9 @@ def post_to_news(item):
 
     content = re.sub(r"<[^>]+>", " ", str(item.get("content", "") or "")).strip()
     content = re.sub(r"\s{2,}", " ", content)
-    if not content:
+
+    media_url = extract_media_url(item)
+    if not content and not media_url:
         return None
 
     url = item.get("url") or f"https://truthsocial.com/@realDonaldTrump/{post_id}"
@@ -66,6 +81,7 @@ def post_to_news(item):
         "content": content[:3900],
         "url": url,
         "timestamp": timestamp,
+        "media_url": media_url,
         "replies": item.get("replies_count", 0),
         "reblogs": item.get("reblogs_count", 0),
         "favourites": item.get("favourites_count", 0),
@@ -82,20 +98,33 @@ def collect_new_posts(raw_posts, seen_ids):
 
 
 def post_to_discord(post):
-    text = f"[查看原贴]({post['url']})\n{post['content']}"
-    text += f"\n\n💬 {post['replies']} · 🔁 {post['reblogs']} · ❤️ {post['favourites']}"
-
     embed = {
         "color": 15158332,
-        "author": {"name": "Trump · Truth Social", "url": post["url"]},
-        "description": text[:4096],
+        "author": {
+            "name": "Donald J. Trump  ·  @realDonaldTrump",
+            "url": post["url"],
+            "icon_url": AVATAR_URL,
+        },
+        "description": post["content"] or " ",
+        "footer": {
+            "text": f"💬 {post['replies']}   🔁 {post['reblogs']}   ❤️ {post['favourites']}   ·  Truth Social",
+        },
     }
+
+    if post["media_url"]:
+        embed["image"] = {"url": post["media_url"]}
+
     if post["timestamp"]:
         embed["timestamp"] = post["timestamp"]
 
     response = requests.post(
         WEBHOOK_URL,
-        json={"username": "Trump Truth Tracker", "embeds": [embed], "allowed_mentions": {"parse": []}},
+        json={
+            "username": "Trump Truth Tracker",
+            "avatar_url": AVATAR_URL,
+            "embeds": [embed],
+            "allowed_mentions": {"parse": []},
+        },
         timeout=30,
     )
 

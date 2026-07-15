@@ -7,13 +7,20 @@ import requests
 import plotly.graph_objects as go
 
 FMP_KEY = os.environ["FMP_API_KEY"]
+EODHD_KEY = os.environ["EODHD_API_KEY"]
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL_EARNINGS"]
-FMP_URL = "https://financialmodelingprep.com/stable/earnings-calendar"
+
+FMP_CALENDAR_URL = "https://financialmodelingprep.com/stable/earnings-calendar"
+FMP_PROFILE_URL = "https://financialmodelingprep.com/stable/profile"
+EODHD_URL = "https://eodhd.com/api/calendar/earnings"
 OUTPUT_FILE = "earnings_calendar.png"
 
 DAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri")
 TIME_ORDER = {"bmo": 0, "amc": 1, "": 2}
 ICON_MAP = {"bmo": "☀️", "amc": "🌙"}
+MAX_PAGES = 20
+MIN_MARKET_CAP = 5_000_000_000
+MAX_COMPANIES_PER_DAY = 20
 
 
 def get_week_range():
@@ -22,36 +29,72 @@ def get_week_range():
     return monday, monday + timedelta(days=4)
 
 
-def fetch_earnings(start, end):
+def fetch_fmp_dates(start, end):
+    entries = []
+    for page in range(MAX_PAGES):
+        response = requests.get(
+            FMP_CALENDAR_URL,
+            params={"from": start.isoformat(), "to": end.isoformat(), "page": page, "apikey": FMP_KEY},
+            timeout=30,
+        )
+        response.raise_for_status()
+        batch = response.json()
+        if not isinstance(batch, list) or not batch:
+            break
+        entries.extend(batch)
+    return entries
+
+
+def fetch_eodhd_timing(start, end):
     response = requests.get(
-        FMP_URL,
-        params={"from": start.isoformat(), "to": end.isoformat(), "apikey": FMP_KEY},
+        EODHD_URL,
+        params={"from": start.isoformat(), "to": end.isoformat(), "api_token": EODHD_KEY, "fmt": "json"},
         timeout=30,
     )
     response.raise_for_status()
-    data = response.json()
-    return data if isinstance(data, list) else []
+    data = response.json().get("earnings", [])
+
+    timing_map = {}
+    for item in data:
+        code = str(item.get("code", "")).split(".")[0]
+        timing = str(item.get("before_after_market") or "").lower()
+        if timing == "beforemarket":
+            timing_map[code] = "bmo"
+        elif timing == "aftermarket":
+            timing_map[code] = "amc"
+    return timing_map
 
 
-def normalize_hour(entry):
-    time_str = str(entry.get("time", "") or "").strip().lower()
-    if time_str in ("bmo", "amc"):
-        return time_str
-    if time_str and ":" in time_str:
-        hour = int(time_str.split(":")[0])
-        return "bmo" if hour < 12 else "amc"
-    return ""
+def fetch_profile(symbol, cache):
+    if symbol in cache:
+        return cache[symbol]
+
+    response = requests.get(FMP_PROFILE_URL, params={"symbol": symbol, "apikey": FMP_KEY}, timeout=30)
+    time.sleep(0.3)
+
+    profile = {"name": symbol, "market_cap": 0}
+    if response.status_code == 200:
+        data = response.json()
+        if isinstance(data, list) and data:
+            profile = {
+                "name": data[0].get("companyName") or symbol,
+                "market_cap": data[0].get("marketCap") or 0,
+            }
+
+    cache[symbol] = profile
+    return profile
 
 
-def group_by_day(entries, monday):
+def group_by_day(fmp_entries, timing_map, monday):
     grouped = {day: [] for day in DAY_LABELS}
+    profile_cache = {}
+    seen_symbols = set()
 
-    for entry in entries:
+    for entry in fmp_entries:
         date_str = entry.get("date")
         symbol = entry.get("symbol")
-        name = entry.get("companyName") or entry.get("name") or symbol
 
-        if not date_str or not symbol:
+        if not date_str or not symbol or symbol in seen_symbols:
             continue
 
         try:
@@ -63,14 +106,21 @@ def group_by_day(entries, monday):
         if not 0 <= offset <= 4:
             continue
 
+        profile = fetch_profile(symbol, profile_cache)
+        if profile["market_cap"] < MIN_MARKET_CAP:
+            continue
+
+        seen_symbols.add(symbol)
         grouped[DAY_LABELS[offset]].append({
             "ticker": f"${symbol}",
-            "name": name,
-            "hour": normalize_hour(entry),
+            "name": profile["name"],
+            "hour": timing_map.get(symbol, ""),
+            "market_cap": profile["market_cap"],
         })
 
     for day_items in grouped.values():
-        day_items.sort(key=lambda x: TIME_ORDER.get(x["hour"], 2))
+        day_items.sort(key=lambda x: (TIME_ORDER.get(x["hour"], 2), -x["market_cap"]))
+        del day_items[MAX_COMPANIES_PER_DAY:]
 
     return grouped
 
@@ -137,20 +187,21 @@ def post_to_discord():
 
 def main():
     monday, friday = get_week_range()
-    entries = fetch_earnings(monday, friday)
 
-    if not entries:
+    fmp_entries = fetch_fmp_dates(monday, friday)
+    if not fmp_entries:
         print("本周没有财报数据。")
         return
 
-    grouped = group_by_day(entries, monday)
+    timing_map = fetch_eodhd_timing(monday, friday)
+    grouped = group_by_day(fmp_entries, timing_map, monday)
 
     if not build_chart(grouped, monday):
-        print("分组后没有可显示的条目。")
+        print("筛选后没有市值达标的公司。")
         return
 
     post_to_discord()
-    print(f"已发送 {monday} 至 {friday} 财报日历。")
+    print(f"已发送 {monday} 至 {friday} 财报日历,共{sum(len(v) for v in grouped.values())}家重点公司。")
 
 
 if __name__ == "__main__":

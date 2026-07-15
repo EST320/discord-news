@@ -74,7 +74,7 @@ def group_by_day(entries, monday):
     return grouped
 
 
-def build_chart(grouped, monday, friday):
+def build_chart(grouped, monday):
     max_rows = max((len(v) for v in grouped.values()), default=0)
     if max_rows == 0:
         return False
@@ -84,7 +84,7 @@ def build_chart(grouped, monday, friday):
     def format_cell(item):
         if not item:
             return ""
-        return f"<b>{item['ticker']}</b> {item['icon']}<br>{item['name']}"
+        return f"<b>{item['ticker']} {item['icon']}</b><br>{item['name']}"
 
     cell_vals = []
     for i in range(max_rows):
@@ -102,14 +102,14 @@ def build_chart(grouped, monday, friday):
             values=[f"<b>{d}</b>" for d in header_vals],
             fill_color="#1f2430",
             font=dict(color="white", size=15, family="Arial"),
-            align="center",
+            align="left",
             height=38,
         ),
         cells=dict(
             values=cols,
             fill_color="#2a2f3a",
             font=dict(color="#E8E8E8", size=13, family="Arial"),
-            align="center",
+            align="left",
             height=56,
             line_color="#3a3f4a",
         ),
@@ -149,7 +149,7 @@ def main():
         return
 
     grouped = group_by_day(entries, monday)
-    has_data = build_chart(grouped, monday, friday)
+    has_data = build_chart(grouped, monday)
 
     if not has_data:
         print("分组后没有可显示的条目。")

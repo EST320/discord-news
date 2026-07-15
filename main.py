@@ -148,7 +148,9 @@ def post_to_discord(news):
     text = headline_link
 
     if news["content"]:
-        text += f"\n{news['content']}"
+        formatted_content = news["content"].replace("\r\n", "\n").replace("\r", "\n")
+        formatted_content = formatted_content.replace("\n", "\n\n")
+        text += f"\n{formatted_content}"
 
     # Discord Embed field value 最大 4096 字符
     text = text[:4096]

@@ -1,4 +1,5 @@
 import json
+import re
 import os
 import time
 from datetime import datetime, timezone
@@ -149,6 +150,7 @@ def post_to_discord(news):
 
     if news["content"]:
         formatted_content = news["content"].replace("\r\n", "\n").replace("\r", "\n")
+        formatted_content = re.sub(r"\n{2,}", "\n", formatted_content)
         formatted_content = formatted_content.replace("\n", "\n\n")
         text += f"\n{formatted_content}"
 

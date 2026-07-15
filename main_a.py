@@ -87,6 +87,9 @@ def item_to_news(item):
         title = content[:120] if content else "华尔街见闻快讯"
         content = content[120:] if len(content) > 120 else ""
 
+    title = title.replace("\r\n", " ").replace("\n", " ").replace("\r", " ").strip()
+    title = re.sub(r"\s{2,}", " ", title)
+
     title = title[:250]
     content = content[:3900]
 
@@ -137,7 +140,10 @@ def collect_new_items(seen_ids):
 
 
 def post_to_discord(news):
-    headline_link = f"[{news['title']}]({LIVE_URL})"
+    safe_title = news["title"].replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    safe_title = re.sub(r"\s{2,}", " ", safe_title).strip()
+
+    headline_link = f"[{safe_title}]({LIVE_URL})"
 
     text = headline_link
 

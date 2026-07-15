@@ -12,12 +12,15 @@ WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL_TRUMP"]
 STATE_FILE = Path("seen_trump.json")
 
 MAX_SEND_PER_RUN = 50
-FIRST_RUN_SEND = 10
 DISCORD_DELAY_SECONDS = 0.55
 RETENTION_SECONDS = 7 * 24 * 3600
 
 AVATAR_URL = "https://static.truthsocial.com/logo-icon.png"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
+MEDIA_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "Referer": "https://truthsocial.com/",
+}
 
 
 def load_state():
@@ -47,11 +50,10 @@ def extract_media_url(item):
     if not media:
         return None
     first = media[0]
-    if isinstance(first, str):
-        return first
-    if isinstance(first, dict):
-        return first.get("url") or first.get("preview_url")
-    return None
+    url = first if isinstance(first, str) else (first.get("url") or first.get("preview_url") if isinstance(first, dict) else None)
+    if not url or url.lower().endswith((".mp4", ".mov", ".webm")):
+        return None
+    return url
 
 
 def post_to_news(item):
@@ -78,7 +80,7 @@ def post_to_news(item):
 
     return {
         "id": post_id,
-        "content": content[:3900],
+        "content": content[:3900] or "🖼️ [图片贴文]",
         "url": url,
         "timestamp": timestamp,
         "media_url": media_url,
@@ -97,6 +99,16 @@ def collect_new_posts(raw_posts, seen_ids):
     return sorted(collected.values(), key=lambda p: p["timestamp"] or "")
 
 
+def download_media(url):
+    try:
+        response = requests.get(url, headers=MEDIA_HEADERS, timeout=15)
+        response.raise_for_status()
+        ext = url.split(".")[-1].split("?")[0][:4] or "jpg"
+        return response.content, f"media.{ext}"
+    except requests.RequestException:
+        return None, None
+
+
 def post_to_discord(post):
     embed = {
         "color": 15158332,
@@ -105,28 +117,37 @@ def post_to_discord(post):
             "url": post["url"],
             "icon_url": AVATAR_URL,
         },
-        "description": post["content"] or " ",
+        "description": post["content"],
         "footer": {
             "text": f"💬 {post['replies']}   🔁 {post['reblogs']}   ❤️ {post['favourites']}   ·  Truth Social",
         },
     }
-
-    if post["media_url"]:
-        embed["image"] = {"url": post["media_url"]}
-
     if post["timestamp"]:
         embed["timestamp"] = post["timestamp"]
 
-    response = requests.post(
-        WEBHOOK_URL,
-        json={
-            "username": "Trump Truth Tracker",
-            "avatar_url": AVATAR_URL,
-            "embeds": [embed],
-            "allowed_mentions": {"parse": []},
-        },
-        timeout=30,
-    )
+    files = {}
+    if post["media_url"]:
+        media_bytes, filename = download_media(post["media_url"])
+        if media_bytes:
+            embed["image"] = {"url": f"attachment://{filename}"}
+            files["file"] = (filename, media_bytes)
+
+    payload = {
+        "username": "Trump Truth Tracker",
+        "avatar_url": AVATAR_URL,
+        "embeds": [embed],
+        "allowed_mentions": {"parse": []},
+    }
+
+    if files:
+        response = requests.post(
+            WEBHOOK_URL,
+            data={"payload_json": json.dumps(payload)},
+            files=files,
+            timeout=30,
+        )
+    else:
+        response = requests.post(WEBHOOK_URL, json=payload, timeout=30)
 
     if response.status_code == 429:
         time.sleep(float(response.json().get("retry_after", 2)) + 1)
@@ -137,19 +158,20 @@ def post_to_discord(post):
 
 def main():
     seen = load_state()
+    is_first_run = not seen
     seen_ids = set(seen)
 
     raw_posts = fetch_posts()
     new_posts = collect_new_posts(raw_posts, seen_ids)
 
-    to_send = new_posts[-FIRST_RUN_SEND:] if not seen_ids else new_posts[:MAX_SEND_PER_RUN]
+    to_send = [] if is_first_run else new_posts[:MAX_SEND_PER_RUN]
 
     for post in to_send:
         post_to_discord(post)
         time.sleep(DISCORD_DELAY_SECONDS)
 
     now = time.time()
-    for post in (new_posts if not seen_ids else to_send):
+    for post in new_posts:
         seen[post["id"]] = now
 
     save_state(seen)

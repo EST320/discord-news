@@ -3,6 +3,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
+from itertools import islice
 from pathlib import Path
 
 import requests
@@ -17,7 +18,6 @@ MAX_SEND_PER_RUN = 50
 DISCORD_DELAY_SECONDS = 0.55
 RETENTION_SECONDS = 7 * 24 * 3600
 
-AVATAR_URL = "https://static.truthsocial.com/logo-icon.png"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 MEDIA_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -131,18 +131,20 @@ def post_to_news(item):
         "url": url,
         "timestamp": timestamp,
         "media_url": media_url,
-        "replies": item.get("replies_count", 0),
-        "reblogs": item.get("reblogs_count", 0),
-        "favourites": item.get("favourites_count", 0),
     }
 
 
 def collect_new_posts(raw_posts, seen_ids):
+    """O(n) single pass to dedupe + filter unseen posts, O(n log n) final
+    sort by timestamp. Space is O(k) where k = number of *new* posts only,
+    not the full raw_posts payload, since already-seen posts are dropped
+    immediately instead of being kept in memory."""
     collected = {}
     for item in raw_posts:
         post = post_to_news(item)
-        if post and post["id"] not in seen_ids:
-            collected[post["id"]] = post
+        if post is None or post["id"] in seen_ids:
+            continue
+        collected[post["id"]] = post
     return sorted(collected.values(), key=lambda p: p["timestamp"] or "")
 
 
@@ -162,12 +164,8 @@ def post_to_discord(post):
         "author": {
             "name": "Donald J. Trump  ·  @realDonaldTrump",
             "url": post["url"],
-            "icon_url": AVATAR_URL,
         },
         "description": build_description(post["content"]),
-        "footer": {
-            "text": f"💬 {post['replies']}   🔁 {post['reblogs']}   ❤️ {post['favourites']}   ·  Truth Social",
-        },
     }
     if post["timestamp"]:
         embed["timestamp"] = post["timestamp"]
@@ -179,9 +177,9 @@ def post_to_discord(post):
             embed["image"] = {"url": f"attachment://{filename}"}
             files["file"] = (filename, media_bytes)
 
+    # "username"/"avatar_url" 字段故意不传:不传这两个键,Discord会自动
+    # 回退使用该webhook在Discord后台设置好的名字和头像,而不是被代码强制覆盖。
     payload = {
-        "username": "Trump Truth Tracker",
-        "avatar_url": AVATAR_URL,
         "embeds": [embed],
         "allowed_mentions": {"parse": []},
     }
@@ -211,10 +209,13 @@ def main():
     raw_posts = fetch_posts()
     new_posts = collect_new_posts(raw_posts, seen_ids)
 
-    to_send = [] if is_first_run else new_posts[:MAX_SEND_PER_RUN]
+    # islice 惰性迭代前 MAX_SEND_PER_RUN 条,不会像切片一样先复制出一份新列表
+    to_send_iter = iter(()) if is_first_run else islice(new_posts, MAX_SEND_PER_RUN)
 
-    for post in to_send:
+    sent_count = 0
+    for post in to_send_iter:
         post_to_discord(post)
+        sent_count += 1
         time.sleep(DISCORD_DELAY_SECONDS)
 
     now = time.time()
@@ -222,8 +223,9 @@ def main():
         seen[post["id"]] = now
 
     save_state(seen)
-    print(f"检测到 {len(new_posts)} 条,已发送 {len(to_send)} 条。")
+    print(f"检测到 {len(new_posts)} 条,已发送 {sent_count} 条。")
 
 
 if __name__ == "__main__":
     main()
+

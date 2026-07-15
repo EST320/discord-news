@@ -156,7 +156,7 @@ def post_to_discord(news):
     embed = {
         "color": 5793266,
         "author": {
-            "name": "华尔街见闻 · 美股快讯",
+            "name": "wallstreetcn · us-stock",
             "url": LIVE_URL,
         },
         "fields": [

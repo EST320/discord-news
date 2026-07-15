@@ -27,6 +27,6 @@ jobs:
 
       - name: Fetch earnings calendar and post
         env:
-          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           DISCORD_WEBHOOK_URL_EARNINGS: ${{ secrets.DISCORD_WEBHOOK_URL_EARNINGS }}
         run: python earnings_calendar.py

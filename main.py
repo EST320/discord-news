@@ -12,7 +12,7 @@ WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
 
 STATE_FILE = Path("seen.json")
 
-CHANNEL = "每日资讯"
+CHANNEL = "global-channel"
 PAGE_SIZE = 100
 MAX_PAGES = 10
 MAX_SEND_PER_RUN = 100

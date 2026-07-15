@@ -6,10 +6,9 @@ from itertools import zip_longest
 import requests
 import plotly.graph_objects as go
 
-FINNHUB_KEY = os.environ["FINNHUB_API_KEY"]
+FMP_KEY = os.environ["FMP_API_KEY"]
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL_EARNINGS"]
-FINNHUB_URL = "https://finnhub.io/api/v1/calendar/earnings"
-PROFILE_URL = "https://finnhub.io/api/v1/stock/profile2"
+FMP_URL = "https://financialmodelingprep.com/stable/earnings-calendar"
 OUTPUT_FILE = "earnings_calendar.png"
 
 DAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri")
@@ -25,43 +24,49 @@ def get_week_range():
 
 def fetch_earnings(start, end):
     response = requests.get(
-        FINNHUB_URL,
-        params={"from": start.isoformat(), "to": end.isoformat(), "token": FINNHUB_KEY},
+        FMP_URL,
+        params={"from": start.isoformat(), "to": end.isoformat(), "apikey": FMP_KEY},
         timeout=30,
     )
     response.raise_for_status()
-    return response.json().get("earningsCalendar", [])
+    data = response.json()
+    return data if isinstance(data, list) else []
 
 
-def fetch_company_name(symbol, cache):
-    if symbol in cache:
-        return cache[symbol]
-
-    response = requests.get(PROFILE_URL, params={"symbol": symbol, "token": FINNHUB_KEY}, timeout=30)
-    time.sleep(1.1)
-
-    name = response.json().get("name", symbol) if response.status_code == 200 else symbol
-    cache[symbol] = name or symbol
-    return cache[symbol]
+def normalize_hour(entry):
+    time_str = str(entry.get("time", "") or "").strip().lower()
+    if time_str in ("bmo", "amc"):
+        return time_str
+    if time_str and ":" in time_str:
+        hour = int(time_str.split(":")[0])
+        return "bmo" if hour < 12 else "amc"
+    return ""
 
 
 def group_by_day(entries, monday):
     grouped = {day: [] for day in DAY_LABELS}
-    name_cache = {}
 
     for entry in entries:
-        date_str, symbol, hour = entry.get("date"), entry.get("symbol"), entry.get("hour", "")
+        date_str = entry.get("date")
+        symbol = entry.get("symbol")
+        name = entry.get("companyName") or entry.get("name") or symbol
+
         if not date_str or not symbol:
             continue
 
-        offset = (datetime.strptime(date_str, "%Y-%m-%d").date() - monday).days
+        try:
+            entry_date = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+        except ValueError:
+            continue
+
+        offset = (entry_date - monday).days
         if not 0 <= offset <= 4:
             continue
 
         grouped[DAY_LABELS[offset]].append({
             "ticker": f"${symbol}",
-            "name": fetch_company_name(symbol, name_cache),
-            "hour": hour,
+            "name": name,
+            "hour": normalize_hour(entry),
         })
 
     for day_items in grouped.values():

@@ -20,7 +20,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       - name: Install dependencies
         run: pip install requests git+https://github.com/JustAnotherArchivist/snscrape.git
@@ -44,3 +44,4 @@ jobs:
             sleep $((RANDOM % 5 + 1))
           done
           exit 1
+          

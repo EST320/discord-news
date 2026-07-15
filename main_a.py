@@ -40,7 +40,15 @@ def load_state():
 
 
 def save_state(state):
-    state["seen_ids"] = state["seen_ids"][-1000:]
+    now = time.time()
+    cutoff = now - 12 * 3600  # 只保留12小时内的记录
+
+    seen_map = state.get("seen_map", {})
+    seen_map = {k: v for k, v in seen_map.items() if v > cutoff}
+
+    state["seen_map"] = seen_map
+    state.pop("seen_ids", None)
+
     STATE_FILE.write_text(
         json.dumps(state, ensure_ascii=False, indent=2),
         encoding="utf-8",

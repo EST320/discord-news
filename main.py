@@ -143,18 +143,20 @@ def collect_new_items(seen_ids):
 
 
 def post_to_discord(news):
-    text = news["title"]
+    headline_link = f"[{news['title']}]({LIVE_URL})"
+
+    text = headline_link
 
     if news["content"]:
         text += f"\n{news['content']}"
 
-    # 让快讯正文保持小字、紧凑显示
+    # Discord Embed field value 最大 1024 字符
     text = text[:1024]
 
     embed = {
         "color": 5793266,
         "author": {
-            "name": "wallstreetcn · us-stock",
+            "name": "华尔街见闻 · 美股快讯",
             "url": LIVE_URL,
         },
         "fields": [

@@ -6,21 +6,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
-from deep_translator import GoogleTranslator
+import deepl
 
 DATA_URL = "https://ix.cnn.io/data/truth-social/truth_archive.json"
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL_TRUMP"]
+DEEPL_API_KEY = os.environ["DEEPL_API_KEY"]
 STATE_FILE = Path("seen_trump.json")
 
 MAX_SEND_PER_RUN = 50
 DISCORD_DELAY_SECONDS = 0.55
 RETENTION_SECONDS = 7 * 24 * 3600
 
+AVATAR_URL = "https://static.truthsocial.com/logo-icon.png"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 MEDIA_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
     "Referer": "https://truthsocial.com/",
 }
+
+MAX_TRANSLATED_LEN = 1700
+MAX_ORIGINAL_LEN = 1700
+
+translator = deepl.Translator(DEEPL_API_KEY)
 
 
 def load_state():
@@ -56,14 +63,44 @@ def extract_media_url(item):
     return url
 
 
-def translate_zh(text):
-    if not text or text == "🖼️ [图片贴文]":
-        return text
+def translate_text(text):
+    """Translate English -> Chinese using DeepL. Never raises; falls back to
+    the original text if the API call fails or times out, so a translation
+    error can never crash the run or block the post from being sent."""
+    if not text or not text.strip():
+        return None
     try:
-        return GoogleTranslator(source="en", target="zh-CN").translate(text)
-    except Exception as e:
-        print(f"翻译失败: {e}")
-        return text
+        result = translator.translate_text(
+            text,
+            source_lang="EN",
+            target_lang="ZH",
+        )
+        translated = result.text.strip()
+        return translated or None
+    except deepl.DeepLException as exc:
+        print(f"DeepL翻译失败,已回退为仅显示原文: {exc}")
+        return None
+    except Exception as exc:
+        print(f"翻译过程中出现未知异常,已回退为仅显示原文: {exc}")
+        return None
+
+
+def build_description(content):
+    """Builds the embed body: translated text first, then the original
+    English text quoted below it (Discord blockquote via '> ' prefix)."""
+    if not content:
+        return "🖼️ [图片贴文]"
+
+    translated = translate_text(content)
+    original = content[:MAX_ORIGINAL_LEN]
+    quoted_original = "\n".join(f"> {line}" for line in original.splitlines()) or f"> {original}"
+
+    if translated:
+        translated = translated[:MAX_TRANSLATED_LEN]
+        return f"{translated}\n\n{quoted_original}"
+
+    # Fallback: no translation available, show original only (unquoted)
+    return original
 
 
 def post_to_news(item):
@@ -88,12 +125,9 @@ def post_to_news(item):
         except ValueError:
             pass
 
-    original = content[:3900] or "🖼️ [图片贴文]"
-
     return {
         "id": post_id,
-        "content_en": original,
-        "content_zh": translate_zh(original),
+        "content": content[:3900],
         "url": url,
         "timestamp": timestamp,
         "media_url": media_url,
@@ -116,29 +150,24 @@ def download_media(url):
     try:
         response = requests.get(url, headers=MEDIA_HEADERS, timeout=15)
         response.raise_for_status()
-        content_type = response.headers.get("Content-Type", "")
-        if "image" not in content_type:
-            print(f"跳过非图片内容: {url} ({content_type})")
-            return None, None
         ext = url.split(".")[-1].split("?")[0][:4] or "jpg"
         return response.content, f"media.{ext}"
-    except requests.RequestException as e:
-        print(f"图片下载失败: {url} -> {e}")
+    except requests.RequestException:
         return None, None
 
 
 def post_to_discord(post):
-    description = post["content_zh"]
-    if post["content_zh"] != post["content_en"]:
-        description += f"\n\n> {post['content_en']}"
-
     embed = {
         "color": 15158332,
-        "description": description[:4096],
+        "author": {
+            "name": "Donald J. Trump  ·  @realDonaldTrump",
+            "url": post["url"],
+            "icon_url": AVATAR_URL,
+        },
+        "description": build_description(post["content"]),
         "footer": {
             "text": f"💬 {post['replies']}   🔁 {post['reblogs']}   ❤️ {post['favourites']}   ·  Truth Social",
         },
-        "url": post["url"],
     }
     if post["timestamp"]:
         embed["timestamp"] = post["timestamp"]
@@ -149,10 +178,10 @@ def post_to_discord(post):
         if media_bytes:
             embed["image"] = {"url": f"attachment://{filename}"}
             files["file"] = (filename, media_bytes)
-        else:
-            embed["image"] = {"url": post["media_url"]}
 
     payload = {
+        "username": "Trump Truth Tracker",
+        "avatar_url": AVATAR_URL,
         "embeds": [embed],
         "allowed_mentions": {"parse": []},
     }

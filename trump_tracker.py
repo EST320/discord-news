@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+from deep_translator import GoogleTranslator
 
 DATA_URL = "https://ix.cnn.io/data/truth-social/truth_archive.json"
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL_TRUMP"]
@@ -15,7 +16,6 @@ MAX_SEND_PER_RUN = 50
 DISCORD_DELAY_SECONDS = 0.55
 RETENTION_SECONDS = 7 * 24 * 3600
 
-AVATAR_URL = "https://static.truthsocial.com/logo-icon.png"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 MEDIA_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -56,6 +56,16 @@ def extract_media_url(item):
     return url
 
 
+def translate_zh(text):
+    if not text or text == "🖼️ [图片贴文]":
+        return text
+    try:
+        return GoogleTranslator(source="en", target="zh-CN").translate(text)
+    except Exception as e:
+        print(f"翻译失败: {e}")
+        return text
+
+
 def post_to_news(item):
     post_id = str(item.get("id", "")).strip()
     if not post_id:
@@ -78,9 +88,12 @@ def post_to_news(item):
         except ValueError:
             pass
 
+    original = content[:3900] or "🖼️ [图片贴文]"
+
     return {
         "id": post_id,
-        "content": content[:3900] or "🖼️ [图片贴文]",
+        "content_en": original,
+        "content_zh": translate_zh(original),
         "url": url,
         "timestamp": timestamp,
         "media_url": media_url,
@@ -103,24 +116,29 @@ def download_media(url):
     try:
         response = requests.get(url, headers=MEDIA_HEADERS, timeout=15)
         response.raise_for_status()
+        content_type = response.headers.get("Content-Type", "")
+        if "image" not in content_type:
+            print(f"跳过非图片内容: {url} ({content_type})")
+            return None, None
         ext = url.split(".")[-1].split("?")[0][:4] or "jpg"
         return response.content, f"media.{ext}"
-    except requests.RequestException:
+    except requests.RequestException as e:
+        print(f"图片下载失败: {url} -> {e}")
         return None, None
 
 
 def post_to_discord(post):
+    description = post["content_zh"]
+    if post["content_zh"] != post["content_en"]:
+        description += f"\n\n> {post['content_en']}"
+
     embed = {
         "color": 15158332,
-        "author": {
-            "name": "Donald J. Trump  ·  @realDonaldTrump",
-            "url": post["url"],
-            "icon_url": AVATAR_URL,
-        },
-        "description": post["content"],
+        "description": description[:4096],
         "footer": {
             "text": f"💬 {post['replies']}   🔁 {post['reblogs']}   ❤️ {post['favourites']}   ·  Truth Social",
         },
+        "url": post["url"],
     }
     if post["timestamp"]:
         embed["timestamp"] = post["timestamp"]
@@ -131,10 +149,10 @@ def post_to_discord(post):
         if media_bytes:
             embed["image"] = {"url": f"attachment://{filename}"}
             files["file"] = (filename, media_bytes)
+        else:
+            embed["image"] = {"url": post["media_url"]}
 
     payload = {
-        "username": "Trump Truth Tracker",
-        "avatar_url": AVATAR_URL,
         "embeds": [embed],
         "allowed_mentions": {"parse": []},
     }

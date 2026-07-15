@@ -21,7 +21,7 @@ jobs:
       - name: Fetch A-stock live news and post
         env:
           DISCORD_WEBHOOK_URL_A: ${{ secrets.DISCORD_WEBHOOK_URL_A }}
-        run: python main_a.py
+        run: python main_h.py
       - name: Save state
         run: |
           git config user.name "github-actions[bot]"

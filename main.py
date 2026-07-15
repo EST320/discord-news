@@ -12,7 +12,7 @@ WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
 
 STATE_FILE = Path("seen.json")
 
-CHANNEL = "global-channel"
+CHANNEL = "US Stock"
 PAGE_SIZE = 100
 MAX_PAGES = 10
 MAX_SEND_PER_RUN = 100
@@ -143,20 +143,27 @@ def collect_new_items(seen_ids):
 
 
 def post_to_discord(news):
-    description = news["content"] or " "
+    text = news["title"]
+
+    if news["content"]:
+        text += f"\n{news['content']}"
+
+    # 让快讯正文保持小字、紧凑显示
+    text = text[:1024]
 
     embed = {
-        "title": news["title"],
-        "url": LIVE_URL,
-        "description": description,
-        "color": 3447003,
+        "color": 5793266,
         "author": {
             "name": "华尔街见闻 · 全球快讯",
             "url": LIVE_URL,
         },
-        "footer": {
-            "text": "global-channel · GitHub Actions",
-        },
+        "fields": [
+            {
+                "name": "\u200b",
+                "value": text,
+                "inline": False,
+            }
+        ],
     }
 
     if news["timestamp"]:
@@ -178,7 +185,6 @@ def post_to_discord(news):
         return post_to_discord(news)
 
     response.raise_for_status()
-
 
 def main():
     state = load_state()

@@ -135,7 +135,6 @@ def post_to_discord():
     with open(OUTPUT_FILE, "rb") as f:
         response = requests.post(
             WEBHOOK_URL,
-            data={"username": "财报鸡"},
             files={"file": (OUTPUT_FILE, f, "image/png")},
             timeout=30,
         )

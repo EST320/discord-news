@@ -27,6 +27,8 @@ MEDIA_HEADERS = {
 MAX_TRANSLATED_LEN = 1700
 MAX_ORIGINAL_LEN = 1700
 
+URL_PATTERN = re.compile(r"https?://\S+")
+
 translator = deepl.Translator(DEEPL_API_KEY)
 
 
@@ -63,6 +65,20 @@ def extract_media_url(item):
     return url
 
 
+def extract_pure_link(content):
+    """如果这条帖子内容本质上只是一个链接(去掉链接后剩余文字为空),
+    返回这个链接;否则返回None。纯链接帖子会被单独处理:跳过翻译,
+    并放在Discord消息的顶层content字段以触发原生链接展开(视频/图片预览)。"""
+    if not content:
+        return None
+    stripped = content.strip()
+    urls = URL_PATTERN.findall(stripped)
+    if not urls:
+        return None
+    remaining = URL_PATTERN.sub("", stripped).strip()
+    return urls[0] if not remaining else None
+
+
 def translate_text(text):
     """Translate English -> Chinese using DeepL. Never raises; falls back to
     the original text if the API call fails or times out, so a translation
@@ -87,9 +103,14 @@ def translate_text(text):
 
 def build_description(content):
     """Builds the embed body: translated text first, then the original
-    English text quoted below it (Discord blockquote via '> ' prefix)."""
+    English text quoted below it (Discord blockquote via '> ' prefix).
+    纯链接帖子直接原样显示,不调用翻译(链接不是自然语言,翻译没有意义,
+    还会白白消耗DeepL额度和延迟)。"""
     if not content:
         return "🖼️ [图片贴文]"
+
+    if extract_pure_link(content):
+        return content[:MAX_ORIGINAL_LEN]
 
     translated = translate_text(content)
     original = content[:MAX_ORIGINAL_LEN]
@@ -99,7 +120,6 @@ def build_description(content):
         translated = translated[:MAX_TRANSLATED_LEN]
         return f"{translated}\n\n{quoted_original}"
 
-    # Fallback: no translation available, show original only (unquoted)
     return original
 
 
@@ -136,9 +156,7 @@ def post_to_news(item):
 
 def collect_new_posts(raw_posts, seen_ids):
     """O(n) single pass to dedupe + filter unseen posts, O(n log n) final
-    sort by timestamp. Space is O(k) where k = number of *new* posts only,
-    not the full raw_posts payload, since already-seen posts are dropped
-    immediately instead of being kept in memory."""
+    sort by timestamp. Space is O(k) where k = number of *new* posts only."""
     collected = {}
     for item in raw_posts:
         post = post_to_news(item)
@@ -184,6 +202,12 @@ def post_to_discord(post):
         "allowed_mentions": {"parse": []},
     }
 
+    pure_link = extract_pure_link(post["content"])
+    if pure_link:
+        # 放在顶层content而不是embed里,才能触发Discord原生链接展开
+        # (视频/图片预览卡片)。embed依然保留,用于展示作者信息和跳转链接。
+        payload["content"] = pure_link
+
     if files:
         response = requests.post(
             WEBHOOK_URL,
@@ -209,7 +233,6 @@ def main():
     raw_posts = fetch_posts()
     new_posts = collect_new_posts(raw_posts, seen_ids)
 
-    # islice 惰性迭代前 MAX_SEND_PER_RUN 条,不会像切片一样先复制出一份新列表
     to_send_iter = iter(()) if is_first_run else islice(new_posts, MAX_SEND_PER_RUN)
 
     sent_count = 0
@@ -228,4 +251,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

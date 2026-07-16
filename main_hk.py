@@ -19,6 +19,7 @@ MAX_SEND_PER_RUN = 100
 FIRST_RUN_SEND = 10
 DISCORD_DELAY_SECONDS = 0.55
 RETENTION_SECONDS = 12 * 3600
+MAX_NEWS_AGE_SECONDS = 15 * 60
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -77,18 +78,26 @@ def item_to_news(item):
     content = content[:3900]
 
     display_time = item.get("display_time")
+    display_ts = display_time if isinstance(display_time, (int, float)) else None
     timestamp = (
-        datetime.fromtimestamp(display_time, tz=timezone.utc).isoformat()
-        if isinstance(display_time, (int, float))
+        datetime.fromtimestamp(display_ts, tz=timezone.utc).isoformat()
+        if display_ts is not None
         else None
     )
 
-    return {"id": news_id, "title": title, "content": content, "timestamp": timestamp}
+    return {
+        "id": news_id,
+        "title": title,
+        "content": content,
+        "timestamp": timestamp,
+        "display_ts": display_ts,
+    }
 
 
 def collect_new_items(seen_ids):
     collected = {}
     cursor = 0
+    now = time.time()
 
     for _ in range(MAX_PAGES):
         raw_items, next_cursor = api_get(cursor)
@@ -97,6 +106,10 @@ def collect_new_items(seen_ids):
 
         page_news = [n for n in (item_to_news(x) for x in raw_items) if n]
         for news in page_news:
+            if news["display_ts"] is None:
+                continue
+            if now - news["display_ts"] > MAX_NEWS_AGE_SECONDS:
+                continue
             if news["id"] not in seen_ids:
                 collected[news["id"]] = news
 
@@ -122,6 +135,7 @@ def post_to_discord(news):
         "author": {"name": "wallstreetcn · hk-stock", "url": LIVE_URL},
         "description": text[:4096],
     }
+
     if news["timestamp"]:
         embed["timestamp"] = news["timestamp"]
 

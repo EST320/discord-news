@@ -102,25 +102,16 @@ def translate_text(text):
 
 
 def build_description(content):
-    """Builds the embed body: translated text first, then the original
-    English text quoted below it (Discord blockquote via '> ' prefix).
-    纯链接帖子直接原样显示,不调用翻译(链接不是自然语言,翻译没有意义,
-    还会白白消耗DeepL额度和延迟)。"""
+    """仅显示 DeepL 中文译文；翻译失败时回退显示原文。"""
     if not content:
         return "🖼️ [图片贴文]"
 
+    # 纯链接不需要翻译，也没有可读的中文正文。
     if extract_pure_link(content):
         return content[:MAX_ORIGINAL_LEN]
 
     translated = translate_text(content)
-    original = content[:MAX_ORIGINAL_LEN]
-    quoted_original = "\n".join(f"> {line}" for line in original.splitlines()) or f"> {original}"
-
-    if translated:
-        translated = translated[:MAX_TRANSLATED_LEN]
-        return f"{translated}\n\n{quoted_original}"
-
-    return original
+    return (translated or content)[:3900]
 
 
 def post_to_news(item):
@@ -179,12 +170,9 @@ def download_media(url):
 def post_to_discord(post):
     embed = {
         "color": 15158332,
-        "author": {
-            "name": "Donald J. Trump  ·  @realDonaldTrump",
-            "url": post["url"],
-        },
         "description": build_description(post["content"]),
     }
+
     if post["timestamp"]:
         embed["timestamp"] = post["timestamp"]
 
@@ -193,10 +181,12 @@ def post_to_discord(post):
         media_bytes, filename = download_media(post["media_url"])
         if media_bytes:
             embed["image"] = {"url": f"attachment://{filename}"}
-            files["file"] = (filename, media_bytes)
+            files["file"] = (filename, media_bytes, "image/jpeg") 
 
-    # "username"/"avatar_url" 字段故意不传:不传这两个键,Discord会自动
-    # 回退使用该webhook在Discord后台设置好的名字和头像,而不是被代码强制覆盖。
+    # 不传 username / avatar_url：
+    # Discord 自动使用 webhook 后台配置的名称和头像。
+    # 不传 embed.author：
+    # Embed 卡片内部不会出现 “Donald J. Trump · @realDonaldTrump”。
     payload = {
         "embeds": [embed],
         "allowed_mentions": {"parse": []},
@@ -204,19 +194,22 @@ def post_to_discord(post):
 
     pure_link = extract_pure_link(post["content"])
     if pure_link:
-        # 放在顶层content而不是embed里,才能触发Discord原生链接展开
-        # (视频/图片预览卡片)。embed依然保留,用于展示作者信息和跳转链接。
+        # 纯链接贴文仍然放在顶层，保留 Discord 原生的视频/图片展开。
         payload["content"] = pure_link
 
     if files:
         response = requests.post(
             WEBHOOK_URL,
-            data={"payload_json": json.dumps(payload)},
+            data={"payload_json": json.dumps(payload, ensure_ascii=False)},
             files=files,
             timeout=30,
         )
     else:
-        response = requests.post(WEBHOOK_URL, json=payload, timeout=30)
+        response = requests.post(
+            WEBHOOK_URL,
+            json=payload,
+            timeout=30,
+        )
 
     if response.status_code == 429:
         time.sleep(float(response.json().get("retry_after", 2)) + 1)

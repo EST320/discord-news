@@ -28,8 +28,7 @@ jobs:
       - name: Fetch US-stock live news and post
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python inspect_wallstreetcn_tags.py
-
+        run: python main.py
 
       - name: Save state
         run: |

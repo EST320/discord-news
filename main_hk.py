@@ -141,7 +141,7 @@ def post_to_discord(news):
 
     response = requests.post(
         WEBHOOK_URL,
-        json={"username": "华尔街见闻快讯", "embeds": [embed], "allowed_mentions": {"parse": []}},
+        json={"embeds": [embed], "allowed_mentions": {"parse": []}},
         timeout=30,
     )
 

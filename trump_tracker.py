@@ -276,24 +276,16 @@ def build_description(content):
 
 
 # =========================
-# 截图
-# =========================
-
 def screenshot_truth_post(post):
     """
-    打开 Truth Social 原帖 URL 并截图。
-    优先尝试截图帖文卡片；找不到卡片时退回整页截图。
+    尝试截取 Truth Social 页面。
+
+    如果发现 Cloudflare 人机验证，不保存或上传该截图，
+    直接返回 None，交给后续逻辑使用原帖媒体或纯文字。
     """
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
     screenshot_path = SCREENSHOT_DIR / f"truth_{post['id']}.png"
-
-    selectors = [
-        "article",
-        '[data-testid="status"]',
-        '[data-testid="status-content"]',
-        "main article",
-    ]
 
     try:
         with sync_playwright() as playwright:
@@ -311,7 +303,7 @@ def screenshot_truth_post(post):
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/126.0 Safari/537.36"
+                    "Chrome/126.0.0.0 Safari/537.36"
                 ),
             )
 
@@ -324,12 +316,39 @@ def screenshot_truth_post(post):
 
                 page.wait_for_timeout(SCREENSHOT_WAIT_MS)
 
-                # 尝试只截取帖子卡片，避免截到多余页面内容。
+                page_text = page.locator("body").inner_text(
+                    timeout=10000
+                ).lower()
+
+                cloudflare_markers = (
+                    "performing security verification",
+                    "verify you are human",
+                    "just a moment",
+                    "cloudflare",
+                    "challenges.cloudflare.com",
+                )
+
+                if any(marker in page_text for marker in cloudflare_markers):
+                    print(
+                        f"Truth Social 被 Cloudflare 拦截，"
+                        f"跳过截图：{post['id']}"
+                    )
+                    return None
+
+                selectors = [
+                    "article",
+                    '[data-testid="status"]',
+                    '[data-testid="status-content"]',
+                    "main article",
+                ]
+
                 for selector in selectors:
                     locator = page.locator(selector).first
 
                     try:
-                        if locator.count() and locator.is_visible(timeout=1500):
+                        if locator.count() and locator.is_visible(
+                            timeout=1500
+                        ):
                             locator.screenshot(
                                 path=str(screenshot_path),
                                 timeout=15000,
@@ -338,7 +357,6 @@ def screenshot_truth_post(post):
                     except Exception:
                         continue
 
-                # 未找到卡片时，截图整个页面作为后备。
                 if not screenshot_path.exists():
                     page.screenshot(
                         path=str(screenshot_path),
@@ -348,7 +366,10 @@ def screenshot_truth_post(post):
             finally:
                 browser.close()
 
-        if screenshot_path.exists() and screenshot_path.stat().st_size > 0:
+        if (
+            screenshot_path.exists()
+            and screenshot_path.stat().st_size > 0
+        ):
             return screenshot_path
 
     except Exception as exc:
@@ -356,8 +377,8 @@ def screenshot_truth_post(post):
 
     screenshot_path.unlink(missing_ok=True)
     return None
-
-
+                            
+        
 def download_media(url):
     """截图失败时，使用帖子自带图片作为后备。"""
     try:

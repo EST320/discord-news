@@ -31,9 +31,16 @@ CARD_DIR = Path("trump_cards")
 MAX_SEND_PER_RUN = 20
 DISCORD_DELAY_SECONDS = 0.8
 
+
 # CNN 归档可能有延迟。12 小时内首次出现的帖子允许发出；
 # 超过 12 小时的历史帖子，即使不在 seen 中也绝不补发。
 MAX_POST_AGE_SECONDS = 12 * 3600
+
+#test
+SEND_ON_FIRST_RUN = True
+MAX_SEND_PER_RUN = 1
+MAX_POST_AGE_SECONDS = 24 * 3600
+#
 
 # ID 和正文哈希保留 30 天，避免 archive 重复返回时再次发送。
 RETENTION_SECONDS = 30 * 24 * 3600

@@ -46,12 +46,6 @@ RETENTION_SECONDS = 30 * 24 * 3600
 # True  = 会推送 MAX_POST_AGE_SECONDS 时间窗口内的帖子。
 SEND_ON_FIRST_RUN = False
 
-#test
-SEND_ON_FIRST_RUN = True
-MAX_SEND_PER_RUN = 1
-MAX_POST_AGE_SECONDS = 24 * 3600
-#
-
 # Discord Embed 描述最大长度低于 Discord 4096 上限，留出安全空间。
 MAX_TRANSLATED_LEN = 3800
 

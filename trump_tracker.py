@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 # 配置
 # ============================================================
 
-TEST_MODE = TRUE
+TEST_MODE = True
 DATA_URL = "https://ix.cnn.io/data/truth-social/truth_archive.json"
 
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL_TRUMP"]

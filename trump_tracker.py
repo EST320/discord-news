@@ -37,7 +37,6 @@ DISCORD_DELAY_SECONDS = 0.8
 MAX_POST_AGE_SECONDS = 12 * 3600
 
 
-
 # ID 和正文哈希保留 30 天，避免 archive 重复返回时再次发送。
 RETENTION_SECONDS = 30 * 24 * 3600
 

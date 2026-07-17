@@ -20,6 +20,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 # 配置
 # ============================================================
 
+TEST_MODE = TRUE
 DATA_URL = "https://ix.cnn.io/data/truth-social/truth_archive.json"
 
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL_TRUMP"]
@@ -973,6 +974,37 @@ def post_to_discord(post):
 def main():
     state = load_state()
 
+    if TEST_MODE:
+        now = time.time()
+
+        test_post = {
+            "id": f"test-{int(now)}",
+            "content": (
+                "This is a test message from the Trump Truth Tracker. "
+                "It verifies the Discord webhook, DeepL translation, "
+                "and the generated post card."
+            ),
+            "url": "https://truthsocial.com/@realDonaldTrump",
+            "created_ts": now,
+            "timestamp": datetime.fromtimestamp(
+                now,
+                tz=timezone.utc,
+            ).isoformat(),
+            "media": None,
+            "avatar_url": None,
+            "content_hash": hashlib.sha256(
+                f"discord-test-{int(now)}".encode("utf-8")
+            ).hexdigest(),
+        }
+
+        post_to_discord(test_post)
+
+        print(
+            "测试成功：已发送模拟帖子。"
+            "未读取 CNN，未修改 seen_trump.json。"
+        )
+        return
+        
     raw_posts = fetch_posts()
     new_posts = collect_new_posts(raw_posts, state)
 

@@ -36,11 +36,7 @@ DISCORD_DELAY_SECONDS = 0.8
 # 超过 12 小时的历史帖子，即使不在 seen 中也绝不补发。
 MAX_POST_AGE_SECONDS = 12 * 3600
 
-#test
-SEND_ON_FIRST_RUN = True
-MAX_SEND_PER_RUN = 1
-MAX_POST_AGE_SECONDS = 24 * 3600
-#
+
 
 # ID 和正文哈希保留 30 天，避免 archive 重复返回时再次发送。
 RETENTION_SECONDS = 30 * 24 * 3600
@@ -49,6 +45,12 @@ RETENTION_SECONDS = 30 * 24 * 3600
 # False = 不补发当前历史帖子，只建立初始去重状态。
 # True  = 会推送 MAX_POST_AGE_SECONDS 时间窗口内的帖子。
 SEND_ON_FIRST_RUN = False
+
+#test
+SEND_ON_FIRST_RUN = True
+MAX_SEND_PER_RUN = 1
+MAX_POST_AGE_SECONDS = 24 * 3600
+#
 
 # Discord Embed 描述最大长度低于 Discord 4096 上限，留出安全空间。
 MAX_TRANSLATED_LEN = 3800

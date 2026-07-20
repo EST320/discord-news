@@ -579,7 +579,7 @@ def build_embeds(post, translated_text, card_filename):
         embed = {"color": 5763719, "description": chunk}
 
         if index == 0:
-            embed["title"] = "在 Truth Social 查看原帖"
+            embed["title"] = "Truth Social Original Post"
             embed["url"] = post["url"]
             embed["image"] = {"url": f"attachment://{card_filename}"}
 

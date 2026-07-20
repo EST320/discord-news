@@ -1,0 +1,36 @@
+name: Fear and Greed Tracker
+
+on:
+  workflow_dispatch:          # 第三方服务与手动测试均通过此事件触发
+
+permissions:
+  contents: write
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Fear and Greed tracker
+        run: python feargreed_tracker.py
+        env:
+          DISCORD_WEBHOOK_URL_FEARGREED: ${{ secrets.DISCORD_WEBHOOK_URL_FEARGREED }}
+
+      - name: Save state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add seen_feargreed.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Update fear and greed state"
+          git pull --rebase origin main && git push

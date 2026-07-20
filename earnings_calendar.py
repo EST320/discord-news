@@ -1,7 +1,6 @@
 import os
 import time
 from datetime import datetime, timedelta
-from itertools import zip_longest
 
 import requests
 import plotly.graph_objects as go
@@ -17,12 +16,20 @@ TIME_ORDER = {"bmo": 0, "amc": 1, "": 2}
 ICON_MAP = {"bmo": "☀️", "amc": "🌙"}
 MIN_MARKET_CAP = 5_000_000_000
 MAX_COMPANIES_PER_DAY = 15
+PROFILE_REQUEST_DELAY = 1.1
 
 
-def get_week_range():
+def get_next_week_range():
+    """
+    在周五运行 workflow 时，本周一到本周五已经是"当前周"。
+    直接加 7 天锁定"下周一"到"下周五"，
+    不依赖运行的具体星期几或具体时间。
+    """
     today = datetime.utcnow().date()
-    monday = today - timedelta(days=today.weekday())
-    return monday, monday + timedelta(days=4)
+    this_monday = today - timedelta(days=today.weekday())
+    next_monday = this_monday + timedelta(days=7)
+    next_friday = next_monday + timedelta(days=4)
+    return next_monday, next_friday
 
 
 def fetch_earnings(start, end):
@@ -36,11 +43,16 @@ def fetch_earnings(start, end):
 
 
 def fetch_profile(symbol, cache):
+    """
+    cache 命中时 O(1) 直接返回，避免重复请求同一 symbol。
+    同一财报日历里，同一家公司理论上只会出现一次，
+    但缓存仍保留以防 API 返回重复条目。
+    """
     if symbol in cache:
         return cache[symbol]
 
     response = requests.get(PROFILE_URL, params={"symbol": symbol, "token": FINNHUB_KEY}, timeout=30)
-    time.sleep(1.1)
+    time.sleep(PROFILE_REQUEST_DELAY)
 
     profile = {"name": symbol, "market_cap": 0}
     if response.status_code == 200:
@@ -55,11 +67,18 @@ def fetch_profile(symbol, cache):
 
 
 def group_by_day(entries, monday):
+    """
+    单次遍历 entries（O(n)），日期越界或无 symbol 直接跳过，
+    避免不必要的 API 调用。
+    """
     grouped = {day: [] for day in DAY_LABELS}
     profile_cache = {}
 
     for entry in entries:
-        date_str, symbol, hour = entry.get("date"), entry.get("symbol"), entry.get("hour", "")
+        date_str = entry.get("date")
+        symbol = entry.get("symbol")
+        hour = entry.get("hour", "")
+
         if not date_str or not symbol:
             continue
 
@@ -89,7 +108,10 @@ def format_cell(item):
     if not item:
         return ""
     icon = ICON_MAP.get(item["hour"], "")
-    return f"<b>{item['ticker']} {icon}</b>".strip() + f"<br>{item['name']}"
+    label = f"<b>{item['ticker']}</b>"
+    if icon:
+        label += f" {icon}"
+    return f"{label}<br>{item['name']}"
 
 
 def build_chart(grouped, monday):
@@ -97,16 +119,20 @@ def build_chart(grouped, monday):
     if max_rows == 0:
         return False
 
-    header_vals = [f"{day} {(monday + timedelta(days=i)).strftime('%b %d')}" for i, day in enumerate(DAY_LABELS)]
+    header_vals = [
+        f"<b>{day} {(monday + timedelta(days=i)).strftime('%b %d')}</b>"
+        for i, day in enumerate(DAY_LABELS)
+    ]
+
     cell_vals = [
-        [format_cell(item) for item in (day_items + [None] * (max_rows - len(day_items)))]
+        [format_cell(item) for item in day_items] + [""] * (max_rows - len(day_items))
         for day_items in grouped.values()
     ]
 
     fig = go.Figure(data=[go.Table(
         columnwidth=[150] * len(DAY_LABELS),
         header=dict(
-            values=[f"<b>{d}</b>" for d in header_vals],
+            values=header_vals,
             fill_color="#1f2430",
             font=dict(color="white", size=15, family="Arial"),
             align="left",
@@ -131,6 +157,7 @@ def build_chart(grouped, monday):
     fig.write_image(OUTPUT_FILE)
     return True
 
+
 def post_to_discord():
     with open(OUTPUT_FILE, "rb") as f:
         response = requests.post(
@@ -147,11 +174,11 @@ def post_to_discord():
 
 
 def main():
-    monday, friday = get_week_range()
+    monday, friday = get_next_week_range()
     entries = fetch_earnings(monday, friday)
 
     if not entries:
-        print("本周没有财报数据。")
+        print(f"{monday} 至 {friday} 没有财报数据。")
         return
 
     grouped = group_by_day(entries, monday)
@@ -161,7 +188,8 @@ def main():
         return
 
     post_to_discord()
-    print(f"已发送 {monday} 至 {friday} 财报日历,共{sum(len(v) for v in grouped.values())}家公司。")
+    total = sum(len(v) for v in grouped.values())
+    print(f"已发送 {monday} 至 {friday} 财报日历，共 {total} 家公司。")
 
 
 if __name__ == "__main__":

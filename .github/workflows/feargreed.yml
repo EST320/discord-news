@@ -1,7 +1,7 @@
 name: Fear and Greed Tracker
 
 on:
-  workflow_dispatch:          # 第三方服务与手动测试均通过此事件触发
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -19,7 +19,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install requests matplotlib numpy
 
       - name: Run Fear and Greed tracker
         run: python feargreed_tracker.py

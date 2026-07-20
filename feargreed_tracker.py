@@ -324,8 +324,7 @@ def draw_full_card(value, title, subtitle, icon_label, history, source_label, up
     ax.text(icx, icy, icon_label, ha="center", va="center", fontsize=9, color="white", fontweight="bold", zorder=9)
 
     ax.plot([-1.35, 1.35], [-0.72, -0.72], color="#e5e5e5", linewidth=1)
-    ax.text(-1.25, -0.82, source_label, fontsize=9, color="#a5a9af", ha="left")
-    ax.text(1.25, -0.82, updated_at, fontsize=9, color="#a5a9af", ha="right")
+    ax.text(0, -0.82, source_label, fontsize=9, color="#a5a9af", ha="center")
 
     # ---- Right: Historical Values ----
     ax2 = fig.add_axes([0.57, 0.07, 0.41, 0.86])
@@ -374,7 +373,6 @@ def post_to_discord(title, commentary, value, updated_at, chart_path, color):
         "color": color,
         "fields": [
             {"name": "Current Value", "value": f"{value:.2f}", "inline": True},
-            {"name": "Updated", "value": updated_at, "inline": True},
         ],
         "image": {"url": f"attachment://{chart_path.name}"},
         "timestamp": datetime.now(timezone.utc).isoformat(),

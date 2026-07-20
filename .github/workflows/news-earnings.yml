@@ -26,3 +26,5 @@ jobs:
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           DISCORD_WEBHOOK_URL_EARNINGS: ${{ secrets.DISCORD_WEBHOOK_URL_EARNINGS }}
         run: python earnings_calendar.py
+
+# 注意 plotly.write_image 需要 kaleido 包才能导出 PNG，如果你原本环境已经装了可以忽略，没装的话必须加进 pip install，否则 fig.write_image(OUTPUT_FILE) 会直接报错。

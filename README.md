@@ -47,9 +47,9 @@ discord-news/
 6. 状态持久化：GitHub Actions 在每次运行后将更新后的 seen*.json 提交回仓库，供下次运行读取。
 
 ## 环境依赖
-
+```text
 pip install -r requirements.txt
-
+```
 主要依赖：
 
 - requests — HTTP 请求

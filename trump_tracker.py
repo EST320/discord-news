@@ -27,6 +27,7 @@ DEEPL_API_KEY = os.environ["DEEPL_API_KEY"]
 
 STATE_FILE = Path("seen_trump.json")
 CARD_DIR = Path("trump_cards")
+LOCAL_AVATAR_PATH = Path("assets/trump_avatar.jpg")
 
 MAX_SEND_PER_RUN = 20
 DISCORD_DELAY_SECONDS = 0.8
@@ -41,11 +42,6 @@ MAX_BODY_LINES = 60
 
 CARD_DISPLAY_NAME = "Donald J. Trump"
 CARD_HANDLE = "@realDonaldTrump"
-
-FALLBACK_AVATAR_URL = (
-    "https://static-assets-1.truthsocial.com/tmtg:prime-ts-assets/"
-    "accounts/avatars/107/780/257/626/128/497/original/454286ac07a6f6e6.jpeg"
-)
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -194,26 +190,6 @@ def get_first_media(item):
     return {"url": url, "type": media_type, "preview_url": preview_url or None}
 
 
-def get_avatar_url(item):
-    account = item.get("account") or item.get("user") or {}
-    if not isinstance(account, dict):
-        account = {}
-
-    candidates = (
-        item.get("avatar"),
-        item.get("avatar_url"),
-        account.get("avatar"),
-        account.get("avatar_url"),
-        account.get("profile_image_url"),
-    )
-
-    for value in candidates:
-        if isinstance(value, str) and value.strip().startswith("http"):
-            return value.strip()
-
-    return FALLBACK_AVATAR_URL
-
-
 def make_content_hash(content, media):
     normalized = re.sub(r"\s+", " ", content or "").strip().lower()
     media_key = ""
@@ -257,7 +233,6 @@ def item_to_post(item):
         "created_ts": created_ts,
         "timestamp": timestamp,
         "media": media,
-        "avatar_url": get_avatar_url(item),
         "content_hash": make_content_hash(content, media),
     }
 
@@ -384,22 +359,37 @@ def draw_default_avatar(size=72):
     return canvas
 
 
-_AVATAR_CACHE = {}
+_AVATAR_IMAGE = None
 
-def get_avatar(post):
-    url = post["avatar_url"]
+def get_avatar():
+    """
+    头像固定使用本地文件 assets/trump_avatar.jpg，
+    不再请求 truthsocial.com 的 CDN（该 CDN 会在 TLS 握手层面
+    拦截非浏览器请求，导致每次运行都 fallback 成默认头像）。
+    只在首次调用时读取磁盘并缓存到内存，避免重复 I/O。
+    """
+    global _AVATAR_IMAGE
 
-    if url in _AVATAR_CACHE:
-        source = _AVATAR_CACHE[url]
+    if _AVATAR_IMAGE is not None:
+        return _AVATAR_IMAGE
+
+    if LOCAL_AVATAR_PATH.exists():
+        try:
+            source = Image.open(LOCAL_AVATAR_PATH).convert("RGB")
+        except Exception as exc:
+            print(f"本地头像读取失败，使用默认头像：{exc}")
+            source = draw_default_avatar()
     else:
-        source = download_image(url) or draw_default_avatar()
-        _AVATAR_CACHE[url] = source
+        print(f"未找到本地头像文件 {LOCAL_AVATAR_PATH}，使用默认头像")
+        source = draw_default_avatar()
 
     avatar = ImageOps.fit(source, (72, 72), method=Image.Resampling.LANCZOS)
     mask = Image.new("L", (72, 72), 0)
     ImageDraw.Draw(mask).ellipse((0, 0, 71, 71), fill=255)
     result = Image.new("RGBA", (72, 72), (0, 0, 0, 0))
     result.paste(avatar.convert("RGBA"), (0, 0), mask)
+
+    _AVATAR_IMAGE = result
     return result
 
 
@@ -498,7 +488,7 @@ def create_post_card(post):
     rounded_rectangle(draw, (1, 1, card_width - 2, card_height - 2), radius=18,
                        fill="#FFFFFF", outline="#E4E4E4", width=2)
 
-    avatar = get_avatar(post)
+    avatar = get_avatar()
     card.paste(avatar, (padding, 31), avatar)
 
     name_x = padding + 92
@@ -579,7 +569,7 @@ def build_embeds(post, translated_text, card_filename):
         embed = {"color": 5763719, "description": chunk}
 
         if index == 0:
-            embed["title"] = "Truth Social Original Post"
+            embed["title"] = "Original Post on Truth Social "
             embed["url"] = post["url"]
             embed["image"] = {"url": f"attachment://{card_filename}"}
 
@@ -640,7 +630,6 @@ def main():
             "created_ts": now,
             "timestamp": datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
             "media": None,
-            "avatar_url": FALLBACK_AVATAR_URL,
             "content_hash": hashlib.sha256(f"discord-test-{int(now)}".encode("utf-8")).hexdigest(),
         }
 

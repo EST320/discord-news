@@ -3,3 +3,5 @@ deepl
 Pillow
 plotly
 kaleido
+matplotlib
+numpy

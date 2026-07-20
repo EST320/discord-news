@@ -15,6 +15,7 @@
 
 ## 项目结构
 
+```text
 discord-news/
 ├── .github/
 │   └── workflows/                    # GitHub Actions 定时任务配置
@@ -32,6 +33,7 @@ discord-news/
 ├── seen_x.json                       # X 追踪去重状态
 ├── requirements.txt                  # Python 依赖
 └── README.md
+```
 
 ## 运行原理
 

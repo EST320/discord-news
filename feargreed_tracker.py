@@ -1,20 +1,25 @@
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-import plotly.graph_objects as go
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.colors import LinearSegmentedColormap
+import numpy as np
 import requests
 
 # ============================================================
-# 配置
+# Config
 # ============================================================
 
 TEST_MODE = False
 
 CNN_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-CRYPTO_URL = "https://api.alternative.me/fng/?limit=2"
+CRYPTO_URL = "https://api.alternative.me/fng/?limit=35"
 
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL_FEARGREED"]
 
@@ -27,11 +32,9 @@ HEADERS = {
     "Referer": "https://www.cnn.com/markets/fear-and-greed",
 }
 
-MIN_CHANGE_TO_POST = 0.5  # 数值变动小于此幅度则跳过本次推送，避免刷屏
-
 
 # ============================================================
-# 状态管理
+# State management
 # ============================================================
 
 def load_state():
@@ -50,23 +53,73 @@ def save_state(state):
 
 
 # ============================================================
-# CNN 恐慌与贪婪指数
+# Generic rating helpers
 # ============================================================
 
-RATING_ZH = {
-    "extreme fear": "极度恐慌",
-    "fear": "恐慌",
-    "neutral": "中性",
-    "greed": "贪婪",
-    "extreme greed": "极度贪婪",
-}
+def rating_label(value):
+    if value < 25:
+        return "Extreme Fear"
+    if value < 45:
+        return "Fear"
+    if value < 55:
+        return "Neutral"
+    if value < 75:
+        return "Greed"
+    return "Extreme Greed"
 
-RATING_RANGE = {
-    "extreme fear": "0-24",
-    "fear": "25-44",
-    "neutral": "45-55",
-    "greed": "56-75",
-    "extreme greed": "76-100",
+
+def rating_color(value):
+    if value < 25:
+        return "#d9534f"
+    if value < 45:
+        return "#e8974e"
+    if value < 55:
+        return "#e0c341"
+    if value < 75:
+        return "#8bc34a"
+    return "#4caf50"
+
+
+# ============================================================
+# CNN Fear & Greed Index
+# ============================================================
+
+COMPONENT_PHRASE_TEMPLATES = {
+    "market_momentum_sp500": {
+        "extreme fear": "S&P 500 momentum is in extreme weakness",
+        "fear": "S&P 500 momentum remains soft",
+        "neutral": "S&P 500 momentum is steady",
+        "greed": "S&P 500 momentum continues to rebound",
+        "extreme greed": "S&P 500 momentum is surging",
+    },
+    "stock_price_breadth": {
+        "extreme fear": "market breadth is stuck in extreme fear territory",
+        "fear": "market breadth remains weak amid a narrow rally",
+        "neutral": "market breadth stays neutral",
+        "greed": "market breadth is steadily expanding",
+        "extreme greed": "market breadth is showing extreme optimism",
+    },
+    "market_volatility_vix_50": {
+        "extreme fear": "volatility is at an extreme fear level",
+        "fear": "volatility is somewhat elevated",
+        "neutral": "volatility remains neutral",
+        "greed": "volatility stays calm and low",
+        "extreme greed": "volatility is at an extreme greed level",
+    },
+    "junk_bond_demand": {
+        "extreme fear": "junk bond demand has collapsed",
+        "fear": "junk bond demand remains soft",
+        "neutral": "junk bond demand stays neutral",
+        "greed": "junk bond demand is strengthening",
+        "extreme greed": "junk bond demand is unusually strong",
+    },
+    "safe_haven_demand": {
+        "extreme fear": "safe-haven demand is spiking sharply",
+        "fear": "safe-haven demand remains elevated",
+        "neutral": "safe-haven demand stays neutral",
+        "greed": "safe-haven demand is fading",
+        "extreme greed": "safe-haven demand has nearly disappeared",
+    },
 }
 
 
@@ -76,55 +129,9 @@ def fetch_cnn_data():
     return response.json()
 
 
-def component_phrase(name, rating, score):
-    rating = (rating or "").lower()
-
-    templates = {
-        "market_momentum_sp500": {
-            "extreme fear": "标普指数深陷极度弱势",
-            "fear": "标普指数动能疲软",
-            "neutral": "标普指数走势平稳",
-            "greed": "标普指数延续反弹态势",
-            "extreme greed": "标普指数强势拉升",
-        },
-        "stock_price_breadth": {
-            "extreme fear": "市场广度深陷极度恐慌区间",
-            "fear": "市场广度受窄幅上涨影响偏弱",
-            "neutral": "市场广度保持中性",
-            "greed": "市场广度稳步扩大",
-            "extreme greed": "市场广度呈现极度乐观",
-        },
-        "market_volatility_vix_50": {
-            "extreme fear": "波动率处于极度恐慌水平",
-            "fear": "波动率略显紧张",
-            "neutral": "波动率保持中性",
-            "greed": "波动率保持低位平稳",
-            "extreme greed": "波动率处于极度乐观区间",
-        },
-        "junk_bond_demand": {
-            "extreme fear": "垂圾债需求极度萎缩",
-            "fear": "垂圾债需求疲软",
-            "neutral": "垂圾债需求保持中性",
-            "greed": "垂圾债需求走强",
-            "extreme greed": "垂圾债需求异常火热",
-        },
-        "safe_haven_demand": {
-            "extreme fear": "避险需求急剧升温",
-            "fear": "避险需求偏高",
-            "neutral": "避险需求保持中性",
-            "greed": "避险需求走弱",
-            "extreme greed": "避险需求几近消失",
-        },
-    }
-
-    phrases = templates.get(name, {})
-    return phrases.get(rating)
-
-
 def build_cnn_commentary(data):
     fg = data.get("fear_and_greed", {})
     score = fg.get("score")
-    rating = (fg.get("rating") or "").lower()
 
     parts = []
     for key in (
@@ -135,28 +142,63 @@ def build_cnn_commentary(data):
         "safe_haven_demand",
     ):
         comp = data.get(key, {})
-        phrase = component_phrase(key, comp.get("rating"), comp.get("score"))
+        comp_rating = (comp.get("rating") or "").lower()
+        phrase = COMPONENT_PHRASE_TEMPLATES.get(key, {}).get(comp_rating)
         if phrase:
             parts.append(phrase)
 
-    summary = "，".join(parts[:3]) if parts else "市场情绪指标暂无明显变化"
-    rating_zh = RATING_ZH.get(rating, rating or "未知")
+    summary = ", ".join(parts[:3]) if parts else "Sentiment indicators show no notable change"
+    label = rating_label(float(score)) if score is not None else "Unknown"
 
-    return f"{summary}，恐慌与贪婪指数处于{rating_zh}区间，最新读数为 {score:.2f}。"
+    return f"{summary.capitalize()}, the Fear & Greed Index sits in {label} territory at {score:.2f}."
+
+
+def get_cnn_history_value(series, days_ago):
+    """Find the CNN historical value closest to N days ago."""
+    if not series:
+        return None
+
+    target = datetime.now(timezone.utc) - timedelta(days=days_ago)
+    target_ts = target.timestamp() * 1000  # CNN timestamps are in milliseconds
+
+    best_point = None
+    best_diff = None
+    for point in series:
+        ts = point.get("x")
+        val = point.get("y")
+        if ts is None or val is None:
+            continue
+        diff = abs(ts - target_ts)
+        if best_diff is None or diff < best_diff:
+            best_diff = diff
+            best_point = val
+
+    return best_point
+
+
+def build_cnn_history(data):
+    fg = data.get("fear_and_greed_historical", {})
+    series = fg.get("data", [])
+
+    current_fg = data.get("fear_and_greed", {})
+    now_value = float(current_fg.get("score", 0))
+
+    history = []
+    for label, days_ago in (("Now", 0), ("Yesterday", 1), ("Last week", 7), ("Last month", 30)):
+        if days_ago == 0:
+            value = now_value
+        else:
+            value = get_cnn_history_value(series, days_ago)
+            if value is None:
+                value = now_value
+        history.append((label, float(value)))
+
+    return history
 
 
 # ============================================================
-# 加密货币恐慌与贪婪指数
+# Crypto Fear & Greed Index
 # ============================================================
-
-CRYPTO_RATING_MAP = {
-    "Extreme Fear": ("极度恐慌", "0-24"),
-    "Fear": ("恐慌", "25-44"),
-    "Neutral": ("中性", "45-55"),
-    "Greed": ("贪婪", "56-75"),
-    "Extreme Greed": ("极度贪婪", "76-100"),
-}
-
 
 def fetch_crypto_data():
     response = requests.get(CRYPTO_URL, headers=HEADERS, timeout=30)
@@ -165,65 +207,164 @@ def fetch_crypto_data():
     return payload.get("data", [])
 
 
-def build_crypto_commentary(current_value, prev_value, classification):
-    rating_zh, _ = CRYPTO_RATING_MAP.get(classification, (classification, ""))
+def build_crypto_commentary(current_value, prev_value):
+    label = rating_label(current_value)
 
     if prev_value is None:
-        trend = "暂无历史对比数据"
+        trend = "no prior data for comparison"
     else:
         diff = current_value - prev_value
         if abs(diff) < 0.5:
-            trend = "较上一期基本持平"
+            trend = "little changed from the previous reading"
         elif diff > 0:
-            trend = f"较上一期上升了 {diff:.1f}"
+            trend = f"up {diff:.1f} points from the previous reading"
         else:
-            trend = f"较上一期下降了 {abs(diff):.1f}"
+            trend = f"down {abs(diff):.1f} points from the previous reading"
 
-    return f"加密货币市场当前情绪为「{rating_zh}」，{trend}。"
+    return f"Crypto market sentiment is currently \"{label}\", {trend}."
+
+
+def build_crypto_history(entries):
+    """
+    Entries are ordered newest to oldest (as returned by alternative.me).
+    Index 0 = today, 1 = yesterday, 7 = a week ago, 30 = a month ago
+    (falls back to the oldest available entry if data is insufficient).
+    """
+    def pick(idx):
+        if idx < len(entries):
+            return float(entries[idx]["value"])
+        return float(entries[-1]["value"])
+
+    return [
+        ("Now", pick(0)),
+        ("Yesterday", pick(1)),
+        ("Last week", pick(7)),
+        ("Last month", pick(30)),
+    ]
 
 
 # ============================================================
-# 仪表盘图表
+# Gauge chart: gradient dial + Historical Values panel
 # ============================================================
 
-def make_gauge_chart(title, value, rating_zh, rating_range, filename):
+def draw_full_card(value, title, subtitle, icon_label, history, source_label, updated_at, out_path):
+    fig = plt.figure(figsize=(12, 5.4))
+    fig.patch.set_facecolor("white")
+
+    # ---- Left: gauge card ----
+    ax = fig.add_axes([0.03, 0.07, 0.50, 0.86])
+    ax.set_facecolor("white")
+    ax.set_xlim(-1.4, 1.4)
+    ax.set_ylim(-0.85, 1.35)
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    ax.add_patch(plt.Circle((-1.22, 1.18), 0.09, facecolor="#f7931a", zorder=5))
+    ax.text(-1.22, 1.18, icon_label, fontsize=11, ha="center", va="center",
+            color="white", fontweight="bold", zorder=6)
+    ax.text(-1.05, 1.18, title, fontsize=18, ha="left", va="center", color="#2b2b2b", fontweight="bold")
+    ax.text(-1.25, 0.93, subtitle, fontsize=10, ha="left", va="center", color="#8a8f98")
+    ax.plot([-1.35, 1.35], [0.80, 0.80], color="#e5e5e5", linewidth=1)
+
+    ax.text(-1.25, 0.60, "Now:", fontsize=12, ha="left", va="center", color="#555555")
+    ax.text(-1.25, 0.40, rating_label(value), fontsize=15, ha="left", va="center",
+            color=rating_color(value), fontweight="bold")
+
+    cmap = LinearSegmentedColormap.from_list(
+        "fg", ["#d9534f", "#e8974e", "#e0c341", "#8bc34a", "#4caf50"]
+    )
+    r_outer = 0.60
+    r_inner = 0.40
+    n_seg = 200
+    cy = -0.08
+
+    for i in range(n_seg):
+        t0 = i / n_seg
+        t1 = (i + 1) / n_seg
+        theta1 = 180 - t0 * 180
+        theta2 = 180 - t1 * 180
+        color = cmap(t0)
+        wedge = mpatches.Wedge((0, cy), r_outer, theta2, theta1, width=r_outer - r_inner,
+                                facecolor=color, edgecolor="none")
+        ax.add_patch(wedge)
+
+    for tick in [0, 25, 50, 75, 100]:
+        angle = np.radians(180 - (tick / 100) * 180)
+        ox1, oy1 = (r_outer + 0.02) * np.cos(angle), cy + (r_outer + 0.02) * np.sin(angle)
+        ox2, oy2 = (r_outer + 0.08) * np.cos(angle), cy + (r_outer + 0.08) * np.sin(angle)
+        ax.plot([ox1, ox2], [oy1, oy2], color="#999999", linewidth=1.3)
+        tx, ty = (r_outer + 0.18) * np.cos(angle), cy + (r_outer + 0.18) * np.sin(angle)
+        ax.text(tx, ty, str(tick), ha="center", va="center", fontsize=9.5, color="#888888")
+
+    for tick in range(0, 101, 5):
+        if tick % 25 == 0:
+            continue
+        angle = np.radians(180 - (tick / 100) * 180)
+        ox1, oy1 = (r_outer + 0.01) * np.cos(angle), cy + (r_outer + 0.01) * np.sin(angle)
+        ox2, oy2 = (r_outer + 0.04) * np.cos(angle), cy + (r_outer + 0.04) * np.sin(angle)
+        ax.plot([ox1, ox2], [oy1, oy2], color="#c7c7c7", linewidth=0.8)
+
+    needle_angle = np.radians(180 - (value / 100) * 180)
+    needle_len = r_inner - 0.02
+    nx, ny = needle_len * np.cos(needle_angle), cy + needle_len * np.sin(needle_angle)
+    ax.plot([0, nx], [cy, ny], color="#aeaeae", linewidth=5, solid_capstyle="round", zorder=5)
+
+    badge_r = 0.13
+    badge_dist = r_inner + 0.30
+    bx = badge_dist * np.cos(needle_angle)
+    by = cy + badge_dist * np.sin(needle_angle)
+    ax.add_patch(plt.Circle((bx, by), badge_r, color=rating_color(value), zorder=6))
+    ax.text(bx, by, str(int(round(value))), ha="center", va="center", fontsize=17,
+            color="white", fontweight="bold", zorder=7)
+
+    icon_r = 0.07
+    icon_dist = r_inner * 0.5
+    icx, icy = icon_dist * np.cos(needle_angle), cy + icon_dist * np.sin(needle_angle)
+    ax.add_patch(plt.Circle((icx, icy), icon_r, facecolor="#f7931a", edgecolor="white", linewidth=1.5, zorder=8))
+    ax.text(icx, icy, icon_label, ha="center", va="center", fontsize=9, color="white", fontweight="bold", zorder=9)
+
+    ax.plot([-1.35, 1.35], [-0.72, -0.72], color="#e5e5e5", linewidth=1)
+    ax.text(-1.25, -0.82, source_label, fontsize=9, color="#a5a9af", ha="left")
+    ax.text(1.25, -0.82, updated_at, fontsize=9, color="#a5a9af", ha="right")
+
+    # ---- Right: Historical Values ----
+    ax2 = fig.add_axes([0.57, 0.07, 0.41, 0.86])
+    ax2.set_facecolor("white")
+    ax2.set_xlim(0, 1)
+    ax2.set_ylim(0, 1)
+    ax2.axis("off")
+
+    ax2.text(0, 0.97, "Historical Values", fontsize=17, fontweight="bold", color="#2b2b2b", ha="left", va="top")
+
+    n_items = len(history)
+    row_h = 0.82 / n_items
+    top_y = 0.80
+
+    for i, (label, val) in enumerate(history):
+        y = top_y - i * row_h
+        ax2.text(0, y, label, fontsize=12.5, color="#555555", ha="left", va="top")
+        ax2.text(0, y - row_h * 0.42, rating_label(val), fontsize=13.5, color=rating_color(val),
+                 fontweight="bold", ha="left", va="top")
+
+        badge_r2 = 0.055
+        bcx, bcy = 0.90, y - row_h * 0.20
+        ax2.add_patch(plt.Circle((bcx, bcy), badge_r2, color=rating_color(val), zorder=5))
+        ax2.text(bcx, bcy, str(int(round(val))), ha="center", va="center", fontsize=13,
+                 color="white", fontweight="bold", zorder=6)
+
+        if i < n_items - 1:
+            line_y = y - row_h + row_h * 0.10
+            ax2.plot([0, 1], [line_y, line_y], color="#eeeeee", linewidth=1)
+
     CHART_DIR.mkdir(parents=True, exist_ok=True)
-    chart_path = CHART_DIR / filename
+    plt.savefig(out_path, dpi=150, facecolor="white", bbox_inches="tight")
+    plt.close()
 
-    fig = go.Figure(
-        go.Indicator(
-            mode="gauge+number",
-            value=value,
-            number={"font": {"size": 48}},
-            title={"text": f"{title}<br><span style='font-size:0.7em'>当前情绪: {rating_zh} ({rating_range})</span>"},
-            gauge={
-                "axis": {"range": [0, 100], "tickwidth": 1},
-                "bar": {"color": "black", "thickness": 0.25},
-                "steps": [
-                    {"range": [0, 25], "color": "#F4C2C2"},
-                    {"range": [25, 45], "color": "#FADBAA"},
-                    {"range": [45, 55], "color": "#F5F0C4"},
-                    {"range": [55, 75], "color": "#C9E4C5"},
-                    {"range": [75, 100], "color": "#8FCB8F"},
-                ],
-            },
-        )
-    )
-
-    fig.update_layout(
-        width=880,
-        height=560,
-        margin=dict(l=40, r=40, t=100, b=40),
-        paper_bgcolor="white",
-        font={"color": "#1F2430", "family": "Arial"},
-    )
-
-    fig.write_image(str(chart_path))
-    return chart_path
+    return out_path
 
 
 # ============================================================
-# Discord 推送
+# Discord posting
 # ============================================================
 
 def post_to_discord(title, commentary, value, updated_at, chart_path, color):
@@ -232,8 +373,8 @@ def post_to_discord(title, commentary, value, updated_at, chart_path, color):
         "description": commentary,
         "color": color,
         "fields": [
-            {"name": "当前数值", "value": f"{value:.2f}", "inline": True},
-            {"name": "更新时间", "value": updated_at, "inline": True},
+            {"name": "Current Value", "value": f"{value:.2f}", "inline": True},
+            {"name": "Updated", "value": updated_at, "inline": True},
         ],
         "image": {"url": f"attachment://{chart_path.name}"},
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -259,98 +400,91 @@ def post_to_discord(title, commentary, value, updated_at, chart_path, color):
 
 
 # ============================================================
-# 主程序：CNN 部分
+# Main: CNN section (runs once per day)
 # ============================================================
 
 def run_cnn(state):
     data = fetch_cnn_data()
     fg = data.get("fear_and_greed", {})
     score = float(fg.get("score", 0))
-    rating = (fg.get("rating") or "").lower()
-    rating_zh = RATING_ZH.get(rating, rating)
-    rating_range = RATING_RANGE.get(rating, "")
-
-    last_score = state.get("cnn_last")
-    if last_score is not None and abs(score - last_score) < MIN_CHANGE_TO_POST:
-        print(f"CNN 指数变动幅度小于阈值（{score:.2f} vs {last_score:.2f}），跳过推送。")
-        return
 
     commentary = build_cnn_commentary(data)
-    chart_path = make_gauge_chart("CNN 恐慌与贪婪指数", score, rating_zh, rating_range, "cnn_gauge.png")
+    history = build_cnn_history(data)
+    updated_at = datetime.now().strftime("Last updated %b %d, %Y")
 
-    updated_at = datetime.now().strftime("%b %d at %I:%M:%S %p")
-    post_to_discord("CNN 市场情绪监测", commentary, score, updated_at, chart_path, color=15105642)
+    chart_path = draw_full_card(
+        score, "Fear & Greed Index", "CNN Business Stock Market Sentiment",
+        "$", history, "cnn.com", updated_at, CHART_DIR / "cnn_gauge.png"
+    )
+
+    post_to_discord("CNN Market Sentiment Tracker", commentary, score, updated_at, chart_path, color=15105642)
 
     state["cnn_last"] = score
-    print(f"CNN 指数已推送：{score:.2f} ({rating_zh})")
+    print(f"CNN index posted: {score:.2f} ({rating_label(score)})")
 
 
 # ============================================================
-# 主程序：加密货币部分
+# Main: Crypto section (runs once per day)
 # ============================================================
 
 def run_crypto(state):
     entries = fetch_crypto_data()
     if not entries:
-        print("加密货币数据为空，跳过。")
+        print("Crypto data empty, skipping.")
         return
 
-    current = entries[0]
-    current_value = float(current["value"])
-    classification = current["value_classification"]
-    rating_zh, rating_range = CRYPTO_RATING_MAP.get(classification, (classification, ""))
-
+    current_value = float(entries[0]["value"])
     prev_value = float(entries[1]["value"]) if len(entries) > 1 else None
 
-    last_value = state.get("crypto_last")
-    if last_value is not None and abs(current_value - last_value) < MIN_CHANGE_TO_POST:
-        print(f"加密货币指数变动幅度小于阈值（{current_value:.2f} vs {last_value:.2f}），跳过推送。")
-        return
-
-    commentary = build_crypto_commentary(current_value, prev_value, classification)
-    chart_path = make_gauge_chart(
-        "加密货币恐慌与贪婪指数", current_value, rating_zh, rating_range, "crypto_gauge.png"
-    )
+    commentary = build_crypto_commentary(current_value, prev_value)
+    history = build_crypto_history(entries)
 
     updated_at = datetime.fromtimestamp(
-        int(current["timestamp"]), tz=timezone.utc
-    ).strftime("%b %d at %I:%M:%S %p UTC")
+        int(entries[0]["timestamp"]), tz=timezone.utc
+    ).strftime("Last updated %b %d, %Y")
 
-    post_to_discord("加密货币市场情绪监测", commentary, current_value, updated_at, chart_path, color=15844367)
+    chart_path = draw_full_card(
+        current_value, "Fear & Greed Index", "Multifactorial Crypto Market Sentiment Analysis",
+        "B", history, "alternative.me", updated_at, CHART_DIR / "crypto_gauge.png"
+    )
+
+    post_to_discord("Crypto Market Sentiment Tracker", commentary, current_value, updated_at, chart_path, color=15844367)
 
     state["crypto_last"] = current_value
-    print(f"加密货币指数已推送：{current_value:.2f} ({rating_zh})")
+    print(f"Crypto index posted: {current_value:.2f} ({rating_label(current_value)})")
 
 
 # ============================================================
-# 入口
+# Entry point
 # ============================================================
 
 def main():
     state = load_state()
 
     if TEST_MODE:
-        chart_path = make_gauge_chart("CNN 恐慌与贪婪指数", 37.51, "恐慌", "25-44", "test_gauge.png")
-        post_to_discord(
-            "CNN 市场情绪监测（测试）",
-            "这是一条测试消息，用于验证 Webhook、图表生成与推送链路是否正常。",
-            37.51,
-            datetime.now().strftime("%b %d at %I:%M:%S %p"),
-            chart_path,
-            color=15105642,
+        history = [("Now", 37.51), ("Yesterday", 38.6), ("Last week", 41.2), ("Last month", 35.0)]
+        updated_at = datetime.now().strftime("Last updated %b %d, %Y")
+        chart_path = draw_full_card(
+            37.51, "Fear & Greed Index", "CNN Business Stock Market Sentiment",
+            "$", history, "cnn.com", updated_at, CHART_DIR / "test_gauge.png"
         )
-        print("测试成功：已发送模拟仪表盘消息。")
+        post_to_discord(
+            "CNN Market Sentiment Tracker (Test)",
+            "This is a test message to verify the webhook, chart generation, and posting pipeline.",
+            37.51, updated_at, chart_path, color=15105642,
+        )
+        print("Test succeeded: sample gauge message sent.")
         return
 
     try:
         run_cnn(state)
     except Exception as exc:
-        print(f"CNN 指数抓取/推送失败：{exc}")
+        print(f"CNN fetch/post failed: {exc}")
 
     try:
         run_crypto(state)
     except Exception as exc:
-        print(f"加密货币指数抓取/推送失败：{exc}")
+        print(f"Crypto fetch/post failed: {exc}")
 
     save_state(state)
 

@@ -260,13 +260,10 @@ def get_first_media(item):
     }
 
 
-def get_avatar_url(item):
-    """
-    尝试从 CNN JSON 不同可能字段中提取头像。
-    如果取不到，生成卡片时自动绘制红蓝默认头像。
-    """
-    account = item.get("account") or item.get("user") or {}
+FALLBACK_AVATAR_URL = "https://static-assets-1.truthsocial.com/accounts/avatars/https://static-assets-1.truthsocial.com/tmtg:prime-ts-assets/accounts/avatars/107/780/257/626/128/497/original/454286ac07a6f6e6.jpeg/original/avatar.jpg"
 
+def get_avatar_url(item):
+    account = item.get("account") or item.get("user") or {}
     if not isinstance(account, dict):
         account = {}
 
@@ -282,7 +279,7 @@ def get_avatar_url(item):
         if isinstance(value, str) and value.strip().startswith("http"):
             return value.strip()
 
-    return None
+    return FALLBACK_AVATAR_URL
 
 
 def make_content_hash(content, media):

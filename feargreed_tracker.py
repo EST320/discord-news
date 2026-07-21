@@ -84,45 +84,6 @@ def rating_color(value):
 # CNN Fear & Greed Index
 # ============================================================
 
-COMPONENT_PHRASE_TEMPLATES = {
-    "market_momentum_sp500": {
-        "extreme fear": "S&P 500 momentum is in extreme weakness",
-        "fear": "S&P 500 momentum remains soft",
-        "neutral": "S&P 500 momentum is steady",
-        "greed": "S&P 500 momentum continues to rebound",
-        "extreme greed": "S&P 500 momentum is surging",
-    },
-    "stock_price_breadth": {
-        "extreme fear": "market breadth is stuck in extreme fear territory",
-        "fear": "market breadth remains weak amid a narrow rally",
-        "neutral": "market breadth stays neutral",
-        "greed": "market breadth is steadily expanding",
-        "extreme greed": "market breadth is showing extreme optimism",
-    },
-    "market_volatility_vix_50": {
-        "extreme fear": "volatility is at an extreme fear level",
-        "fear": "volatility is somewhat elevated",
-        "neutral": "volatility remains neutral",
-        "greed": "volatility stays calm and low",
-        "extreme greed": "volatility is at an extreme greed level",
-    },
-    "junk_bond_demand": {
-        "extreme fear": "junk bond demand has collapsed",
-        "fear": "junk bond demand remains soft",
-        "neutral": "junk bond demand stays neutral",
-        "greed": "junk bond demand is strengthening",
-        "extreme greed": "junk bond demand is unusually strong",
-    },
-    "safe_haven_demand": {
-        "extreme fear": "safe-haven demand is spiking sharply",
-        "fear": "safe-haven demand remains elevated",
-        "neutral": "safe-haven demand stays neutral",
-        "greed": "safe-haven demand is fading",
-        "extreme greed": "safe-haven demand has nearly disappeared",
-    },
-}
-
-
 def fetch_cnn_data():
     response = requests.get(CNN_URL, headers=HEADERS, timeout=30)
     response.raise_for_status()
@@ -131,26 +92,9 @@ def fetch_cnn_data():
 
 def build_cnn_commentary(data):
     fg = data.get("fear_and_greed", {})
-    score = fg.get("score")
-
-    parts = []
-    for key in (
-        "market_momentum_sp500",
-        "stock_price_breadth",
-        "market_volatility_vix_50",
-        "junk_bond_demand",
-        "safe_haven_demand",
-    ):
-        comp = data.get(key, {})
-        comp_rating = (comp.get("rating") or "").lower()
-        phrase = COMPONENT_PHRASE_TEMPLATES.get(key, {}).get(comp_rating)
-        if phrase:
-            parts.append(phrase)
-
-    summary = ", ".join(parts[:3]) if parts else "Sentiment indicators show no notable change"
-    label = rating_label(float(score)) if score is not None else "Unknown"
-
-    return f"{summary.capitalize()}, the Fear & Greed Index sits in {label} territory at {score:.2f}."
+    score = float(fg.get("score", 0))
+    label = rating_label(score)
+    return f"Stock market sentiment: {label} ({score:.1f})."
 
 
 def get_cnn_history_value(series, days_ago):
@@ -211,17 +155,17 @@ def build_crypto_commentary(current_value, prev_value):
     label = rating_label(current_value)
 
     if prev_value is None:
-        trend = "no prior data for comparison"
+        trend = ""
     else:
         diff = current_value - prev_value
         if abs(diff) < 0.5:
-            trend = "little changed from the previous reading"
+            trend = " (flat)"
         elif diff > 0:
-            trend = f"up {diff:.1f} points from the previous reading"
+            trend = f" (+{diff:.1f})"
         else:
-            trend = f"down {abs(diff):.1f} points from the previous reading"
+            trend = f" (-{abs(diff):.1f})"
 
-    return f"Crypto market sentiment is currently \"{label}\", {trend}."
+    return f"Crypto sentiment: {label} ({current_value:.1f}){trend}."
 
 
 def build_crypto_history(entries):

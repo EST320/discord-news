@@ -90,11 +90,21 @@ def fetch_cnn_data():
     return response.json()
 
 
-def build_cnn_commentary(data):
-    fg = data.get("fear_and_greed", {})
-    score = float(fg.get("score", 0))
+def build_cnn_commentary(score, prev_value):
     label = rating_label(score)
-    return f"Stock market sentiment: {label} ({score:.1f})."
+
+    if prev_value is None:
+        trend = ""
+    else:
+        diff = score - prev_value
+        if abs(diff) < 0.5:
+            trend = " (flat)"
+        elif diff > 0:
+            trend = f" (+{diff:.1f})"
+        else:
+            trend = f" (-{abs(diff):.1f})"
+
+    return f"{label} ({score:.1f}){trend}."
 
 
 def get_cnn_history_value(series, days_ago):
@@ -165,7 +175,7 @@ def build_crypto_commentary(current_value, prev_value):
         else:
             trend = f" (-{abs(diff):.1f})"
 
-    return f"Crypto sentiment: {label} ({current_value:.1f}){trend}."
+    return f"{label} ({current_value:.1f}){trend}."
 
 
 def build_crypto_history(entries):
@@ -342,15 +352,16 @@ def post_to_discord(title, commentary, value, updated_at, chart_path, color):
 
 
 # ============================================================
-# Main: CNN section (runs once per day)
+# Main: CNN section
 # ============================================================
 
 def run_cnn(state):
     data = fetch_cnn_data()
     fg = data.get("fear_and_greed", {})
     score = float(fg.get("score", 0))
+    prev_value = state.get("cnn_last")
 
-    commentary = build_cnn_commentary(data)
+    commentary = build_cnn_commentary(score, prev_value)
     history = build_cnn_history(data)
     updated_at = datetime.now().strftime("Last updated %b %d, %Y")
 
@@ -366,7 +377,7 @@ def run_cnn(state):
 
 
 # ============================================================
-# Main: Crypto section (runs once per day)
+# Main: Crypto section
 # ============================================================
 
 def run_crypto(state):

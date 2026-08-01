@@ -1,6 +1,7 @@
 requests
 deepl
 Pillow
+curl_cffi
 plotly
 kaleido
 matplotlib

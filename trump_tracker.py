@@ -19,6 +19,8 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 # ============================================================
 
 TEST_MODE = False
+# 仅在 TEST_MODE=True 时生效：None / "image" / "video"
+TEST_MEDIA_TYPE = "image"
 
 DATA_URL = "https://ix.cnn.io/data/truth-social/truth_archive.json"
 
@@ -36,21 +38,37 @@ RETENTION_SECONDS = 30 * 24 * 3600
 SEND_ON_FIRST_RUN = False
 MAX_DISCORD_RETRIES = 5
 
-# 图片直连失败时的兜底代理：用 images.weserv.nl 自己的服务器去抓图，
-# 出口 IP 和 GitHub Actions 不一样，能绕开"按数据中心 IP 段拉黑"这类
-# 直连抓不到的封锁方式（这是免费公共服务，没有可用性保证，只是兜底）。
-IMAGE_PROXY_TEMPLATE = "https://images.weserv.nl/?url={}"
-
-# Discord 免费版单文件上传上限是 10MB，这里留点余量给 multipart 的
-# 其他开销。视频超过这个大小就放弃直接附件上传，退回纯链接。
-MAX_VIDEO_ATTACHMENT_BYTES = 9 * 1024 * 1024
-
 MAX_TRANSLATED_LEN = 4000
 MAX_CARD_TEXT_LEN = 6000
 MAX_BODY_LINES = 60
 
 CARD_DISPLAY_NAME = "Donald J. Trump"
 CARD_HANDLE = "@realDonaldTrump"
+
+# ------------------------------------------------------------
+# 媒体投递策略（核心开关）
+#
+# "direct" —— embed 里直接填 Truth Social 的原始 URL，由 Discord 自己
+#             的服务器去抓取。我们的 runner 完全不碰媒体文件。
+# "proxy"  —— embed 里填 images.weserv.nl 的代理 URL。weserv 去抓
+#             Truth Social，Discord 再去抓 weserv。如果 Truth Social
+#             的 CDN 连 Discord 的抓取服务也一起挡了，就切到这个。
+#
+# 先用 direct 测；图片如果还是不显示，把这一行改成 "proxy" 再测一次。
+# 注意 weserv 只处理图片，视频缩略图同样是图片所以也适用。
+# ------------------------------------------------------------
+IMAGE_DELIVERY = "direct"
+
+IMAGE_PROXY_TEMPLATE = "https://images.weserv.nl/?url={}"
+
+# Discord 免费版单文件上传上限 10MB，留余量给 multipart 的其他开销。
+# 视频超过这个大小就放弃附件上传，退回缩略图 + 链接。
+MAX_VIDEO_ATTACHMENT_BYTES = 9 * 1024 * 1024
+
+# 是否尝试为视频下载原始字节并作为附件上传（成功的话 Discord 里就是
+# 一个真正可播放的播放器）。如果确认 runner 一定抓不到，可以关掉它
+# 省掉每次的无效下载尝试和等待时间。
+TRY_VIDEO_ATTACHMENT = True
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -67,15 +85,9 @@ MEDIA_HEADERS = {
 translator = deepl.Translator(DEEPL_API_KEY)
 
 # ------------------------------------------------------------
-# 图片下载客户端
-#
-# static-assets-1.truthsocial.com 这个 CDN 会在 TLS 握手层面（而不是
-# 靠 User-Agent / Referer 这类应用层 header）拦截非浏览器请求 —— 这也是
-# 之前头像必须改用本地文件的原因。普通 requests/urllib3 的 TLS 指纹和
-# 真实浏览器不同，直接抓帖子里的图片大概率会被同样拦截。这里改用
-# curl_cffi 模拟 Chrome 的 TLS/HTTP2 指纹来绕开。
-#
-# 需要先安装：pip install curl_cffi
+# curl_cffi：只在"需要我们自己下载字节"时才用得上（目前只剩视频附件
+# 这一条路径）。图片已经改成交给 Discord 抓，不再依赖它。
+# 没装也不影响图片显示，只会让视频附件那条路走不通。
 # ------------------------------------------------------------
 try:
     from curl_cffi.requests import Session as _CurlSession
@@ -85,13 +97,10 @@ try:
 except ImportError:
     _CURL_SESSION = None
     HAS_CURL_CFFI = False
-    print(
-        "警告：未安装 curl_cffi，图片抓取很可能被 Truth Social CDN 的反爬机制"
-        "在 TLS 层拦截。建议执行 `pip install curl_cffi` 后重新运行。"
-    )
+    print("提示：未安装 curl_cffi，视频附件下载将使用普通 requests（成功率更低）。")
 
 # ============================================================
-# 状态：ID 去重 + 内容哈希去重 + HTTP 条件请求缓存（ETag / Last-Modified）
+# 状态：ID 去重 + 内容哈希去重 + HTTP 条件请求缓存
 # ============================================================
 
 def load_state():
@@ -149,11 +158,9 @@ def fetch_posts(state):
     """
     带 ETag / Last-Modified 条件请求的抓取。
 
-    cron 是每 2 分钟跑一次，一天 720 次，而 Trump 不可能每次都发新内容——
-    如果远端支持条件请求，绝大多数运行会直接收到 304，我们就能跳过
-    JSON 解析 + 全量扫描 + 去重这一整套后续处理，只留一次很轻的 HTTP
-    往返。如果远端不支持 ETag/Last-Modified（没有相关响应头），这里会
-    自动退化成普通全量请求，不会有任何副作用。
+    cron 每 2 分钟一次、一天 720 次，而 Trump 不可能每次都发新内容。
+    远端支持条件请求时，绝大多数运行会直接收到 304，跳过 JSON 解析 +
+    全量扫描 + 去重。远端不支持时自动退化成普通全量请求，无副作用。
 
     返回 None 表示"数据未变化，本次无需继续处理"。
     """
@@ -213,43 +220,84 @@ def clean_html_content(value):
     return text.strip()
 
 
-def get_first_media(item):
-    media = item.get("media")
-    if not isinstance(media, list) or not media:
+def get_all_media(item):
+    """
+    返回帖子里的全部媒体（不再只取第一张）。
+
+    Discord 单条消息最多 10 个 embed，多图帖子（数据源里常见 2-4 张）
+    现在可以全部显示出来，而不是像以前那样只保留第一张。
+    """
+    media_list = item.get("media")
+    if not isinstance(media_list, list) or not media_list:
+        return []
+
+    results = []
+    for entry in media_list:
+        if isinstance(entry, str):
+            url = entry.strip().replace("&amp;", "&")
+            preview_url = None
+        elif isinstance(entry, dict):
+            url = str(entry.get("url") or "").strip().replace("&amp;", "&")
+            preview_url = str(
+                entry.get("preview_url")
+                or entry.get("preview")
+                or entry.get("thumbnail_url")
+                or ""
+            ).strip().replace("&amp;", "&") or None
+        else:
+            continue
+
+        if not url:
+            continue
+
+        path = urlparse(url).path.lower()
+        if path.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")):
+            media_type = "image"
+        elif path.endswith((".mp4", ".mov", ".webm", ".m3u8")):
+            media_type = "video"
+        else:
+            media_type = "unknown"
+
+        results.append({"url": url, "type": media_type, "preview_url": preview_url})
+
+    return results
+
+
+def derive_video_thumbnail(video_url):
+    """
+    推导视频缩略图 URL。
+
+    Truth Social 是 Mastodon 的 fork，媒体附件通常同时存在 original/
+    和 small/ 两个变体，small/ 是服务端自动生成的预览帧。数据源本身
+    不提供 preview_url 字段，所以这里按 Mastodon 的路径约定推导。
+
+    这是基于 Mastodon 惯例的推测，不保证一定存在；推导不出来或实际
+    404 时，视频那条 embed 只会少一张预览图，不影响其他内容。
+    """
+    if not video_url or "/original/" not in video_url:
         return None
-    first = media[0]
-    if isinstance(first, str):
-        url = first.strip().replace("&amp;", "&")
-        preview_url = None
-    elif isinstance(first, dict):
-        # 目前 CNN 的数据源里 media 都是纯字符串 URL，走不到这个分支；
-        # 保留它是为了兼容数据源未来改成带缩略图字段的结构。
-        url = str(first.get("url") or "").strip().replace("&amp;", "&")
-        preview_url = str(
-            first.get("preview_url")
-            or first.get("preview")
-            or first.get("thumbnail_url")
-            or ""
-        ).strip().replace("&amp;", "&")
-    else:
+    prefix = video_url.rsplit("/original/", 1)[0]
+    stem = Path(urlparse(video_url).path).stem
+    if not stem:
         return None
+    return f"{prefix}/small/{stem}.jpg"
+
+
+def to_delivery_url(url):
+    """按 IMAGE_DELIVERY 策略，把原始媒体 URL 转成交给 Discord 的 URL。"""
     if not url:
         return None
-    path = urlparse(url).path.lower()
-    if path.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")):
-        media_type = "image"
-    elif path.endswith((".mp4", ".mov", ".webm", ".m3u8")):
-        media_type = "video"
-    else:
-        media_type = "unknown"
-    return {"url": url, "type": media_type, "preview_url": preview_url or None}
+    if IMAGE_DELIVERY == "proxy":
+        return IMAGE_PROXY_TEMPLATE.format(quote(url, safe=""))
+    return url
 
 
-def make_content_hash(content, media):
+def make_content_hash(content, media_list):
     normalized = re.sub(r"\s+", " ", content or "").strip().lower()
     media_key = ""
-    if media:
-        media_key = (media.get("preview_url") or media.get("url") or "").strip().lower()
+    if media_list:
+        first = media_list[0]
+        media_key = (first.get("preview_url") or first.get("url") or "").strip().lower()
     raw = f"{normalized}|{media_key}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -262,9 +310,9 @@ def item_to_post(item):
     content = clean_html_content(
         item.get("content") or item.get("text") or item.get("body") or ""
     )
-    media = get_first_media(item)
+    media_list = get_all_media(item)
 
-    if not content and not media:
+    if not content and not media_list:
         return None
 
     created_ts, timestamp = parse_timestamp(
@@ -286,8 +334,8 @@ def item_to_post(item):
         "url": post_url,
         "created_ts": created_ts,
         "timestamp": timestamp,
-        "media": media,
-        "content_hash": make_content_hash(content, media),
+        "media_list": media_list,
+        "content_hash": make_content_hash(content, media_list),
     }
 
 
@@ -339,13 +387,19 @@ def translate_text(text):
         return None
 
 
+def first_media_type(post):
+    return post["media_list"][0]["type"] if post["media_list"] else None
+
+
 def build_description(post):
     if post["content"]:
         translated = translate_text(post["content"])
         return (translated or post["content"])[:MAX_TRANSLATED_LEN]
-    if post["media"] and post["media"]["type"] == "video":
+
+    kind = first_media_type(post)
+    if kind == "video":
         return "特朗普发布了一段视频。"
-    if post["media"]:
+    if kind is not None:
         return "特朗普发布了一张图片。"
     return "特朗普发布了一条帖子。"
 
@@ -356,7 +410,12 @@ def split_text(text, limit):
     return [text[i:i + limit] for i in range(0, len(text), limit)]
 
 # ============================================================
-# 生成"原帖卡片图"
+# 生成"原帖卡片图"（纯文字，不含媒体）
+#
+# 关键改动：卡片不再把图片合成进去。合成图片要求 runner 能下载到
+# 媒体文件，而那正是一直失败的环节。现在卡片只画文字，是纯本地
+# 渲染、不联网、永不失败的操作；媒体交给 Discord 单独去抓。
+# 副作用是好的：图片以原始分辨率显示，不再被压进卡片里。
 # ============================================================
 
 def get_font(size, bold=False):
@@ -381,7 +440,6 @@ FONT_NAME = get_font(28, bold=True)
 FONT_HANDLE = get_font(21, bold=False)
 FONT_BODY = get_font(26, bold=False)
 FONT_META = get_font(19, bold=False)
-FONT_VIDEO = get_font(26, bold=True)
 
 
 def _fetch_bytes(url, timeout=20):
@@ -389,9 +447,8 @@ def _fetch_bytes(url, timeout=20):
     抓取任意 URL 的原始字节，成功返回 bytes，失败返回 None。
 
     失败时打印详细诊断（状态码、server / cf-ray 响应头、异常类型、
-    出错响应体前 200 字符）—— 这些信息会出现在 GitHub Actions 的运行
-    日志里，方便下次直接判断到底是被明确拒绝（403/406）、连接被重置，
-    还是超时，而不是像现在这样只能靠猜。
+    响应体前 200 字符）—— 这些会出现在 GitHub Actions 日志里，方便
+    判断到底是被明确拒绝（403/406）、连接被重置，还是超时。
     """
     try:
         if HAS_CURL_CFFI:
@@ -418,68 +475,6 @@ def _fetch_bytes(url, timeout=20):
         return None
 
 
-def download_image(url, timeout=20):
-    """
-    下载图片，两级尝试：
-
-    1) curl_cffi 直连（模拟 Chrome 的 TLS 指纹），对付基于 TLS/JA3
-       指纹的反爬拦截。
-    2) 直连失败就退到 images.weserv.nl 这个公共图片代理重试一次 ——
-       如果拦截其实是按 IP 信誉/数据中心 IP 段做的（伪装了 TLS 指纹
-       还是被拒，这是目前最像的情况），换一个出口 IP 有机会绕过去。
-
-    url 为空时零成本直接返回，不发请求。
-    """
-    if not url:
-        return None
-
-    content = _fetch_bytes(url, timeout=timeout)
-    source = "direct"
-
-    if content is None:
-        proxied_url = IMAGE_PROXY_TEMPLATE.format(quote(url, safe=""))
-        print(f"直连失败，尝试通过图片代理重试：{proxied_url}")
-        content = _fetch_bytes(proxied_url, timeout=timeout)
-        source = "proxy"
-
-    if content is None:
-        print(f"图片下载彻底失败（直连和代理都失败）：{url}")
-        return None
-
-    try:
-        image = Image.open(io.BytesIO(content)).convert("RGB")
-        print(f"图片下载成功（来源：{source}）：{url}")
-        return image
-    except Exception as exc:
-        print(f"下载到的内容不是有效图片：{exc}，来源={source}，url={url}")
-        return None
-
-
-def download_video_bytes(url, timeout=60):
-    """
-    下载视频原始字节，用于作为 Discord 附件直接上传。
-
-    这是目前唯一被证实可靠的"让视频在 Discord 里可播放"的办法——
-    把裸链接放进消息正文，Discord 对不认识 oEmbed 元数据的第三方直链
-    并不会像对 YouTube/Twitch 那样自动生成播放器，实测已确认无效。
-
-    注意：这里没有走 images.weserv.nl 那样的代理兜底，因为那个服务
-    只处理图片。如果视频这里直连也被拦（和图片同样的封锁方式），说明
-    真正需要的是一个能代理任意二进制内容（不限图片）的中转服务，这
-    已经超出这个脚本能单独解决的范围，需要另外搭一个中转。
-    """
-    content = _fetch_bytes(url, timeout=timeout)
-    if content is None:
-        return None
-    if len(content) > MAX_VIDEO_ATTACHMENT_BYTES:
-        print(
-            f"视频文件 {len(content) / 1024 / 1024:.1f}MB 超过附件上限"
-            f"（{MAX_VIDEO_ATTACHMENT_BYTES / 1024 / 1024:.0f}MB），改为仅发送链接：{url}"
-        )
-        return None
-    return content
-
-
 def draw_default_avatar(size=72):
     canvas = Image.new("RGB", (size, size), "#F7F7F7")
     draw = ImageDraw.Draw(canvas)
@@ -496,10 +491,8 @@ _AVATAR_IMAGE = None
 
 def get_avatar():
     """
-    头像固定使用本地文件 assets/trump_avatar.jpg，
-    不再请求 truthsocial.com 的 CDN（该 CDN 会在 TLS 握手层面
-    拦截非浏览器请求，导致每次运行都 fallback 成默认头像）。
-    只在首次调用时读取磁盘并缓存到内存，避免重复 I/O。
+    头像固定使用本地文件 assets/trump_avatar.jpg，不请求 CDN。
+    只在首次调用时读盘并缓存到内存，避免重复 I/O。
     """
     global _AVATAR_IMAGE
     if _AVATAR_IMAGE is not None:
@@ -526,9 +519,9 @@ def get_avatar():
 
 def _split_long_word(draw, word, font, max_width):
     """
-    用二分查找切分一个单独就超过 max_width 的词（比如一长串没有空格的
-    URL）。原来逐字符线性扫描在这种情况下是 O(word_len^2)；这里每次
-    切分是 O(log word_len) 次宽度测量，总体降到 O(word_len log word_len)。
+    用二分查找切分单独就超宽的词（比如一长串没有空格的 URL）。
+    逐字符线性扫描在这种情况下是 O(word_len^2)；二分后每次切分是
+    O(log word_len) 次宽度测量，总体降到 O(word_len log word_len)。
     """
     pieces = []
     start = 0
@@ -541,8 +534,7 @@ def _split_long_word(draw, word, font, max_width):
                 lo = mid
             else:
                 hi = mid - 1
-        # lo 至少是 start+1：即使单个字符本身就超宽，也强制吞掉一个字符，
-        # 避免死循环（和原来的逐字符实现行为一致）。
+        # lo 至少是 start+1：即使单字符本身就超宽也强制吞掉一个，避免死循环
         pieces.append(word[start:lo])
         start = lo
     return pieces
@@ -585,6 +577,7 @@ def rounded_rectangle(draw, box, radius, fill, outline=None, width=1):
 
 
 def create_post_card(post):
+    """纯本地渲染的文字卡片，不联网、不会失败。"""
     CARD_DIR.mkdir(parents=True, exist_ok=True)
     card_path = CARD_DIR / f"trump_{post['id']}.png"
 
@@ -595,9 +588,10 @@ def create_post_card(post):
 
     original_text = (post["content"] or "").strip()
     if not original_text:
-        if post["media"] and post["media"]["type"] == "video":
+        kind = first_media_type(post)
+        if kind == "video":
             original_text = "Video post"
-        elif post["media"]:
+        elif kind is not None:
             original_text = "Image post"
         else:
             original_text = "Truth Social post"
@@ -611,36 +605,13 @@ def create_post_card(post):
     body_line_height = 39
     body_height = max(1, len(body_lines)) * body_line_height
 
-    # ------------------------------------------------------------
-    # 媒体：按 media_kind（image / video / None）决定预留高度，
-    # 而不是按"是否下载成功"决定 —— 这样即使抓图失败，也会画一个
-    # 占位框而不是让图片区域整个消失。
-    # ------------------------------------------------------------
-    media_kind = post["media"]["type"] if post["media"] else None
-
-    source_image = None
-    video_preview = None
-    if media_kind == "image":
-        source_image = download_image(post["media"]["url"])
-    elif media_kind == "video":
-        # 目前 CNN 数据源里视频没有单独的预览图字段（preview_url 恒为
-        # None），download_image 会立刻短路返回 None，不产生额外网络
-        # 请求。保留这行是为了在数据源未来提供缩略图时自动生效。
-        video_preview = download_image(post["media"]["preview_url"])
-
-    media_height = 0
-    if media_kind == "image":
-        media_height = min(560, int(content_width * 0.63)) + 28
-    elif media_kind == "video":
-        media_height = min(460, int(content_width * 0.52)) + 28
-
     footer_height = 82
-    card_height = top_height + body_height + media_height + footer_height + padding
+    card_height = top_height + body_height + footer_height + padding
 
     card = Image.new("RGB", (card_width, card_height), "#FFFFFF")
     draw = ImageDraw.Draw(card)
     rounded_rectangle(draw, (1, 1, card_width - 2, card_height - 2), radius=18,
-                       fill="#FFFFFF", outline="#E4E4E4", width=2)
+                      fill="#FFFFFF", outline="#E4E4E4", width=2)
 
     avatar = get_avatar()
     card.paste(avatar, (padding, 31), avatar)
@@ -658,71 +629,6 @@ def create_post_card(post):
         draw.text((padding, y), line, font=FONT_BODY, fill="#30323A")
         y += body_line_height
 
-    if media_kind == "image":
-        image_top = y + 12
-        image_height = media_height - 28
-
-        if source_image is not None:
-            fitted = ImageOps.fit(source_image, (content_width, image_height),
-                                   method=Image.Resampling.LANCZOS)
-            mask = Image.new("L", (content_width, image_height), 0)
-            ImageDraw.Draw(mask).rounded_rectangle(
-                (0, 0, content_width, image_height), radius=18, fill=255
-            )
-            card.paste(fitted, (padding, image_top), mask)
-        else:
-            # 下载失败时的占位框，而不是让这块区域悄悄消失
-            rounded_rectangle(
-                draw,
-                (padding, image_top, padding + content_width, image_top + image_height),
-                radius=18, fill="#F3F4F6", outline="#E4E4E4", width=2,
-            )
-            placeholder_text = "图片未能加载，请点击下方链接查看原贴"
-            text_width = draw.textlength(placeholder_text, font=FONT_META)
-            draw.text(
-                (padding + (content_width - text_width) / 2, image_top + image_height / 2 - 10),
-                placeholder_text, font=FONT_META, fill="#9CA3AF",
-            )
-
-        y = image_top + image_height + 28
-
-    elif media_kind == "video":
-        video_top = y + 12
-        video_height = media_height - 28
-
-        if video_preview is not None:
-            fitted = ImageOps.fit(video_preview, (content_width, video_height),
-                                   method=Image.Resampling.LANCZOS)
-            mask = Image.new("L", (content_width, video_height), 0)
-            ImageDraw.Draw(mask).rounded_rectangle(
-                (0, 0, content_width, video_height), radius=18, fill=255
-            )
-            card.paste(fitted, (padding, video_top), mask)
-
-            center_x = padding + content_width // 2
-            center_y = video_top + video_height // 2
-            draw.ellipse((center_x - 47, center_y - 47, center_x + 47, center_y + 47), fill="#111827")
-            draw.polygon(
-                [(center_x - 12, center_y - 22), (center_x - 12, center_y + 22), (center_x + 25, center_y)],
-                fill="#FFFFFF",
-            )
-        else:
-            rounded_rectangle(
-                draw,
-                (padding, video_top, padding + content_width, video_top + video_height),
-                radius=18, fill="#111827",
-            )
-            center_x = padding + content_width // 2
-            center_y = video_top + video_height // 2
-            draw.ellipse((center_x - 50, center_y - 50, center_x + 50, center_y + 50), fill="#272C37")
-            draw.polygon(
-                [(center_x - 12, center_y - 23), (center_x - 12, center_y + 23), (center_x + 28, center_y)],
-                fill="#FFFFFF",
-            )
-            draw.text((padding + 24, video_top + video_height - 48), "VIDEO", font=FONT_VIDEO, fill="#FFFFFF")
-
-        y = video_top + video_height + 28
-
     created = "Truth Social"
     if post["created_ts"]:
         dt = datetime.fromtimestamp(post["created_ts"], tz=timezone.utc)
@@ -736,46 +642,99 @@ def create_post_card(post):
     return card_path
 
 # ============================================================
+# 视频附件（唯一能做出"真正可播放播放器"的办法）
+# ============================================================
+
+def download_video_bytes(url, timeout=60):
+    """
+    下载视频原始字节，用于作为 Discord 附件上传。
+
+    把裸链接放进消息正文对 Discord 是无效的 —— Discord 只对认识
+    oEmbed 元数据的站点（YouTube/Twitch 等）自动生成播放器，对第三方
+    直链只当普通文字链接处理（已实测确认）。要真正可播放只能传字节。
+    """
+    content = _fetch_bytes(url, timeout=timeout)
+    if content is None:
+        return None
+    if len(content) > MAX_VIDEO_ATTACHMENT_BYTES:
+        print(
+            f"视频 {len(content) / 1024 / 1024:.1f}MB 超过附件上限"
+            f"（{MAX_VIDEO_ATTACHMENT_BYTES / 1024 / 1024:.0f}MB），改用缩略图 + 链接：{url}"
+        )
+        return None
+    return content
+
+# ============================================================
 # Discord 推送
 # ============================================================
 
 def build_embeds(post, translated_text, card_filename):
+    """
+    组装 embed 列表。
+
+    结构：
+      embed[0]  标题 + 中文翻译 + 文字卡片（attachment）
+      embed[1:] 每个媒体一个 embed，image.url 直接指向远端 —— 由
+                Discord 服务器自己去抓，我们的 runner 完全不参与。
+
+    所有 embed 共用同一个 url（原帖链接），Discord 会把它们合并成
+    一个视觉整体，看起来就是"一条卡片 + 若干张图"。
+    """
     chunks = split_text(translated_text, MAX_TRANSLATED_LEN)
     embeds = []
+
     for index, chunk in enumerate(chunks):
-        embed = {"color": 5763719, "description": chunk}
+        embed = {"color": 5763719, "description": chunk, "url": post["url"]}
         if index == 0:
-            embed["title"] = "Original Post on Truth Social "
-            embed["url"] = post["url"]
+            embed["title"] = "Original Post on Truth Social"
             embed["image"] = {"url": f"attachment://{card_filename}"}
             if post["timestamp"]:
                 embed["timestamp"] = post["timestamp"]
         embeds.append(embed)
+
+    for media in post["media_list"]:
+        if len(embeds) >= 10:
+            break
+
+        if media["type"] == "image":
+            target = to_delivery_url(media["url"])
+        elif media["type"] == "video":
+            # 视频没能作为附件传上去时，退而求其次显示一张预览帧
+            thumb = media.get("preview_url") or derive_video_thumbnail(media["url"])
+            target = to_delivery_url(thumb)
+        else:
+            target = None
+
+        if target:
+            embeds.append({"color": 5763719, "url": post["url"], "image": {"url": target}})
+
     return embeds[:10]
 
 
-def _send_discord_payload(payload, card_path, video_bytes=None, video_filename=None):
+def _send_discord_payload(payload, card_path, video_attachments):
     """
-    只负责把已经准备好的 payload + 附件发出去，并处理 429 重试。
-    卡片渲染、DeepL 翻译、视频下载都在调用方一次性做完 —— 429 重试时
-    不应该把这些开销再重复付一遍，这里只重发 HTTP 请求本身。
+    只负责把准备好的 payload + 附件发出去，并处理 429 重试。
+    卡片渲染、翻译、视频下载都在调用方一次性做完 —— 429 重试时不该
+    把这些开销再付一遍，这里只重发 HTTP 请求本身。
     """
-    for attempt in range(MAX_DISCORD_RETRIES):
+    for _ in range(MAX_DISCORD_RETRIES):
         with card_path.open("rb") as card_file:
             files = {"files[0]": (card_path.name, card_file, "image/png")}
-            if video_bytes is not None:
-                files["files[1]"] = (video_filename, video_bytes, "video/mp4")
+            for index, (filename, data) in enumerate(video_attachments, start=1):
+                files[f"files[{index}]"] = (filename, data, "video/mp4")
 
             response = requests.post(
                 WEBHOOK_URL,
                 data={"payload_json": json.dumps(payload, ensure_ascii=False)},
                 files=files,
-                timeout=90,
+                timeout=120,
             )
         if response.status_code == 429:
             retry_after = float(response.json().get("retry_after", 2))
             time.sleep(retry_after + 1)
             continue
+        if response.status_code >= 400:
+            print(f"[Discord 拒绝] HTTP {response.status_code} body={response.text[:400]!r}")
         response.raise_for_status()
         return
     raise RuntimeError(f"Discord 429 重试 {MAX_DISCORD_RETRIES} 次后仍未发送成功")
@@ -785,26 +744,31 @@ def post_to_discord(post):
     translated_text = build_description(post)
     card_path = create_post_card(post)
 
+    video_attachments = []
+    leftover_video_links = []
+
+    for media in post["media_list"]:
+        if media["type"] != "video":
+            continue
+
+        data = download_video_bytes(media["url"]) if TRY_VIDEO_ATTACHMENT else None
+        if data is not None:
+            filename = Path(urlparse(media["url"]).path).name or f"{post['id']}.mp4"
+            video_attachments.append((filename, data))
+            print(f"视频已下载（{len(data) / 1024 / 1024:.1f}MB），作为附件上传 → Discord 内可直接播放")
+        else:
+            # 附件传不上去时保留链接，让用户至少能点开看
+            leftover_video_links.append(media["url"])
+
     payload = {
         "embeds": build_embeds(post, translated_text, card_path.name),
         "allowed_mentions": {"parse": []},
     }
-
-    video_bytes = None
-    video_filename = None
-    if post["media"] and post["media"]["type"] == "video":
-        video_url = post["media"]["url"]
-        video_bytes = download_video_bytes(video_url)
-        if video_bytes is not None:
-            video_filename = Path(urlparse(video_url).path).name or f"{post['id']}.mp4"
-            print(f"视频已下载（{len(video_bytes) / 1024 / 1024:.1f}MB），作为附件上传")
-        else:
-            # 下载失败或超过附件大小上限时，退回纯链接兜底 ——
-            # 不保证 Discord 会自动生成播放器，但至少是个能点开看的入口。
-            payload["content"] = video_url
+    if leftover_video_links:
+        payload["content"] = "\n".join(leftover_video_links)
 
     try:
-        _send_discord_payload(payload, card_path, video_bytes, video_filename)
+        _send_discord_payload(payload, card_path, video_attachments)
     finally:
         card_path.unlink(missing_ok=True)
 
@@ -812,11 +776,28 @@ def post_to_discord(post):
 # 主程序
 # ============================================================
 
+_TEST_MEDIA_URLS = {
+    "image": "https://static-assets-1.truthsocial.com/tmtg:prime-ts-assets/media_attachments/"
+             "files/117/016/718/777/732/128/original/89b7243307a5d02f.jpg",
+    "video": "https://static-assets-1.truthsocial.com/tmtg:prime-ts-assets/media_attachments/"
+             "files/117/016/402/090/566/111/original/21c1796c935ea564.mp4",
+}
+
+
 def main():
     state = load_state()
 
     if TEST_MODE:
         now = time.time()
+
+        test_media_list = []
+        if TEST_MEDIA_TYPE in _TEST_MEDIA_URLS:
+            test_media_list = [{
+                "url": _TEST_MEDIA_URLS[TEST_MEDIA_TYPE],
+                "type": TEST_MEDIA_TYPE,
+                "preview_url": None,
+            }]
+
         test_post = {
             "id": f"test-{int(now)}",
             "content": (
@@ -827,11 +808,14 @@ def main():
             "url": "https://truthsocial.com/@realDonaldTrump",
             "created_ts": now,
             "timestamp": datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
-            "media": None,
+            "media_list": test_media_list,
             "content_hash": hashlib.sha256(f"discord-test-{int(now)}".encode("utf-8")).hexdigest(),
         }
         post_to_discord(test_post)
-        print("测试成功：已发送模拟帖子。未读取 CNN，未修改 seen_trump.json。")
+        print(
+            f"测试完成：media={TEST_MEDIA_TYPE}，投递策略={IMAGE_DELIVERY}。"
+            "未读取 CNN，未修改 seen_trump.json。"
+        )
         return
 
     raw_posts = fetch_posts(state)

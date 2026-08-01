@@ -818,6 +818,19 @@ def main():
  
     if TEST_MODE:
         now = time.time()
+
+        _TEST_MEDIA_URLS = {
+            "image": "https://static-assets-1.truthsocial.com/tmtg:prime-ts-assets/media_attachments/files/117/016/718/777/732/128/original/89b7243307a5d02f.jpg",
+            "video": "https://static-assets-1.truthsocial.com/tmtg:prime-ts-assets/media_attachments/files/117/016/402/090/566/111/original/21c1796c935ea564.mp4",
+        }
+        test_media = None
+        if TEST_MEDIA_TYPE in _TEST_MEDIA_URLS:
+            test_media = {
+                "url": _TEST_MEDIA_URLS[TEST_MEDIA_TYPE],
+                "type": TEST_MEDIA_TYPE,
+                "preview_url": None,
+            }
+
         test_post = {
             "id": f"test-{int(now)}",
             "content": (
@@ -828,11 +841,11 @@ def main():
             "url": "https://truthsocial.com/@realDonaldTrump",
             "created_ts": now,
             "timestamp": datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
-            "media": None,
+            "media": test_media,
             "content_hash": hashlib.sha256(f"discord-test-{int(now)}".encode("utf-8")).hexdigest(),
         }
         post_to_discord(test_post)
-        print("测试成功：已发送模拟帖子。未读取 CNN，未修改 seen_trump.json。")
+        print(f"测试成功：已发送模拟帖子（media={TEST_MEDIA_TYPE}）。未读取 CNN，未修改 seen_trump.json。")
         return
  
     raw_posts = fetch_posts(state)

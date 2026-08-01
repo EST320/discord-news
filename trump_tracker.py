@@ -19,6 +19,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 # ============================================================
 
 TEST_MODE = True
+TEST_MEDIA_TYPE = "image" 
 
 DATA_URL = "https://ix.cnn.io/data/truth-social/truth_archive.json"
 

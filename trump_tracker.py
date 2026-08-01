@@ -14,12 +14,12 @@ import deepl
 import requests
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-
 # ============================================================
 # 配置
 # ============================================================
 
 TEST_MODE = False
+
 DATA_URL = "https://ix.cnn.io/data/truth-social/truth_archive.json"
 
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL_TRUMP"]
@@ -31,7 +31,6 @@ LOCAL_AVATAR_PATH = Path("assets/trump_avatar.jpg")
 
 MAX_SEND_PER_RUN = 20
 DISCORD_DELAY_SECONDS = 0.8
-
 MAX_POST_AGE_SECONDS = 12 * 3600
 RETENTION_SECONDS = 30 * 24 * 3600
 SEND_ON_FIRST_RUN = False
@@ -49,13 +48,37 @@ HEADERS = {
 }
 
 MEDIA_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Referer": "https://truthsocial.com/",
     "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
 }
 
 translator = deepl.Translator(DEEPL_API_KEY)
 
+# ------------------------------------------------------------
+# 图片下载客户端
+#
+# static-assets-1.truthsocial.com 这个 CDN 会在 TLS 握手层面（而不是
+# 靠 User-Agent / Referer 这类应用层 header）拦截非浏览器请求 —— 这也是
+# 之前头像必须改用本地文件的原因。普通 requests/urllib3 的 TLS 指纹和
+# 真实浏览器不同，直接抓帖子里的图片大概率会被同样拦截，导致卡片里的
+# 图片“悄悄消失”。这里改用 curl_cffi 模拟 Chrome 的 TLS/HTTP2 指纹来绕开。
+#
+# 需要先安装：pip install curl_cffi
+# ------------------------------------------------------------
+try:
+    from curl_cffi.requests import Session as _CurlSession
+
+    _CURL_SESSION = _CurlSession(impersonate="chrome124")
+    HAS_CURL_CFFI = True
+except ImportError:
+    _CURL_SESSION = None
+    HAS_CURL_CFFI = False
+    print(
+        "警告：未安装 curl_cffi，图片抓取很可能被 Truth Social CDN 的反爬机制"
+        "在 TLS 层拦截。建议执行 `pip install curl_cffi` 后重新运行。"
+    )
 
 # ============================================================
 # 状态：ID 去重 + 内容哈希去重
@@ -64,19 +87,15 @@ translator = deepl.Translator(DEEPL_API_KEY)
 def load_state():
     if not STATE_FILE.exists():
         return {"seen": {}, "hashes": {}}
-
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
         seen = data.get("seen", {})
         hashes = data.get("hashes", {})
-
         if not isinstance(seen, dict):
             seen = {}
         if not isinstance(hashes, dict):
             hashes = {}
-
         return {"seen": seen, "hashes": hashes}
-
     except (OSError, json.JSONDecodeError) as exc:
         print(f"读取状态文件失败，将以空状态启动：{exc}")
         return {"seen": {}, "hashes": {}}
@@ -84,7 +103,6 @@ def load_state():
 
 def save_state(state):
     cutoff = time.time() - RETENTION_SECONDS
-
     pruned_seen = {
         k: v for k, v in state["seen"].items()
         if isinstance(v, (int, float)) and v > cutoff
@@ -93,7 +111,6 @@ def save_state(state):
         k: v for k, v in state["hashes"].items()
         if isinstance(v, (int, float)) and v > cutoff
     }
-
     STATE_FILE.write_text(
         json.dumps(
             {"seen": pruned_seen, "hashes": pruned_hashes},
@@ -103,7 +120,6 @@ def save_state(state):
         encoding="utf-8",
     )
 
-
 # ============================================================
 # 数据抓取与帖子解析
 # ============================================================
@@ -112,27 +128,22 @@ def fetch_posts():
     response = requests.get(DATA_URL, headers=HEADERS, timeout=30)
     response.raise_for_status()
     payload = response.json()
-
     if isinstance(payload, list):
         return payload
     if isinstance(payload, dict):
         posts = payload.get("posts", [])
         return posts if isinstance(posts, list) else []
-
     raise RuntimeError(f"CNN 数据格式异常：{type(payload)}")
 
 
 def parse_timestamp(value):
     if not value:
         return None, None
-
     if isinstance(value, (int, float)):
         ts = float(value)
         return ts, datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-
     if not isinstance(value, str):
         return None, None
-
     try:
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
         if dt.tzinfo is None:
@@ -158,9 +169,7 @@ def get_first_media(item):
     media = item.get("media")
     if not isinstance(media, list) or not media:
         return None
-
     first = media[0]
-
     if isinstance(first, str):
         url = first.strip().replace("&amp;", "&")
         preview_url = None
@@ -174,19 +183,15 @@ def get_first_media(item):
         ).strip().replace("&amp;", "&")
     else:
         return None
-
     if not url:
         return None
-
     path = urlparse(url).path.lower()
-
     if path.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")):
         media_type = "image"
     elif path.endswith((".mp4", ".mov", ".webm", ".m3u8")):
         media_type = "video"
     else:
         media_type = "unknown"
-
     return {"url": url, "type": media_type, "preview_url": preview_url or None}
 
 
@@ -222,7 +227,6 @@ def item_to_post(item):
     post_url = str(
         item.get("url") or item.get("status_url") or item.get("permalink") or ""
     ).strip()
-
     if not post_url.startswith("http"):
         post_url = f"https://truthsocial.com/@realDonaldTrump/{post_id}"
 
@@ -257,7 +261,6 @@ def collect_new_posts(raw_posts, state):
             continue
 
         age_seconds = now - post["created_ts"]
-
         if age_seconds < -600:
             print(f"跳过时间异常帖子：{post['id']}")
             continue
@@ -268,7 +271,6 @@ def collect_new_posts(raw_posts, state):
 
     return sorted(collected.values(), key=lambda post: post["created_ts"])
 
-
 # ============================================================
 # DeepL 中文翻译
 # ============================================================
@@ -276,7 +278,6 @@ def collect_new_posts(raw_posts, state):
 def translate_text(text):
     if not text or not text.strip():
         return None
-
     try:
         result = translator.translate_text(text, source_lang="EN", target_lang="ZH")
         return result.text.strip() or None
@@ -304,7 +305,6 @@ def split_text(text, limit):
         return [text]
     return [text[i:i + limit] for i in range(0, len(text), limit)]
 
-
 # ============================================================
 # 生成"原帖卡片图"
 # ============================================================
@@ -321,11 +321,9 @@ def get_font(size, bold=False):
             "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
         ]
     )
-
     for path in candidates:
         if Path(path).exists():
             return ImageFont.truetype(path, size)
-
     return ImageFont.load_default()
 
 
@@ -337,14 +335,26 @@ FONT_VIDEO = get_font(26, bold=True)
 
 
 def download_image(url, timeout=20):
+    """
+    下载图片。优先用 curl_cffi 模拟浏览器 TLS 指纹抓取，因为
+    static-assets-1.truthsocial.com 会在 TLS 握手层面拦截非浏览器请求，
+    普通 requests 经常直接被拒绝或连接被重置。
+    """
     if not url:
         return None
     try:
-        response = requests.get(url, headers=MEDIA_HEADERS, timeout=timeout)
-        response.raise_for_status()
+        if HAS_CURL_CFFI:
+            response = _CURL_SESSION.get(url, headers=MEDIA_HEADERS, timeout=timeout)
+        else:
+            response = requests.get(url, headers=MEDIA_HEADERS, timeout=timeout)
+
+        if response.status_code != 200:
+            print(f"图片下载失败：HTTP {response.status_code}，url={url}")
+            return None
+
         return Image.open(io.BytesIO(response.content)).convert("RGB")
     except Exception as exc:
-        print(f"图片下载失败：{exc}")
+        print(f"图片下载异常：{exc}，url={url}")
         return None
 
 
@@ -361,6 +371,7 @@ def draw_default_avatar(size=72):
 
 _AVATAR_IMAGE = None
 
+
 def get_avatar():
     """
     头像固定使用本地文件 assets/trump_avatar.jpg，
@@ -369,7 +380,6 @@ def get_avatar():
     只在首次调用时读取磁盘并缓存到内存，避免重复 I/O。
     """
     global _AVATAR_IMAGE
-
     if _AVATAR_IMAGE is not None:
         return _AVATAR_IMAGE
 
@@ -388,20 +398,17 @@ def get_avatar():
     ImageDraw.Draw(mask).ellipse((0, 0, 71, 71), fill=255)
     result = Image.new("RGBA", (72, 72), (0, 0, 0, 0))
     result.paste(avatar.convert("RGBA"), (0, 0), mask)
-
     _AVATAR_IMAGE = result
     return result
 
 
 def wrap_text(draw, text, font, max_width):
     lines = []
-
     for paragraph in (text or "").splitlines() or [""]:
         words = paragraph.split(" ")
         if not words:
             lines.append("")
             continue
-
         current = ""
         for word in words:
             candidate = word if not current else f"{current} {word}"
@@ -412,7 +419,6 @@ def wrap_text(draw, text, font, max_width):
                 lines.append(current)
                 current = word
                 continue
-
             segment = ""
             for char in word:
                 candidate = segment + char
@@ -423,10 +429,8 @@ def wrap_text(draw, text, font, max_width):
                         lines.append(segment)
                     segment = char
             current = segment
-
         if current:
             lines.append(current)
-
     return lines
 
 
@@ -451,32 +455,34 @@ def create_post_card(post):
             original_text = "Image post"
         else:
             original_text = "Truth Social post"
-
     original_text = original_text[:MAX_CARD_TEXT_LEN]
 
     scratch_draw = ImageDraw.Draw(Image.new("RGB", (card_width, 10), "white"))
     body_lines = wrap_text(scratch_draw, original_text, FONT_BODY, content_width)
-
     if len(body_lines) > MAX_BODY_LINES:
         body_lines = body_lines[:MAX_BODY_LINES]
         body_lines[-1] = body_lines[-1][:max(0, len(body_lines[-1]) - 3)] + "..."
-
     body_line_height = 39
     body_height = max(1, len(body_lines)) * body_line_height
 
+    # ------------------------------------------------------------
+    # 媒体：按 media_kind（image / video / None）决定预留高度，
+    # 而不是按"是否下载成功"决定 —— 这样即使抓图失败，也会画一个
+    # 占位框而不是让图片区域整个消失。
+    # ------------------------------------------------------------
+    media_kind = post["media"]["type"] if post["media"] else None
+
     source_image = None
     video_preview = None
-
-    if post["media"]:
-        if post["media"]["type"] == "image":
-            source_image = download_image(post["media"]["url"])
-        elif post["media"]["type"] == "video":
-            video_preview = download_image(post["media"]["preview_url"])
+    if media_kind == "image":
+        source_image = download_image(post["media"]["url"])
+    elif media_kind == "video":
+        video_preview = download_image(post["media"]["preview_url"])
 
     media_height = 0
-    if source_image or video_preview:
+    if media_kind == "image":
         media_height = min(560, int(content_width * 0.63)) + 28
-    elif post["media"] and post["media"]["type"] == "video":
+    elif media_kind == "video":
         media_height = min(460, int(content_width * 0.52)) + 28
 
     footer_height = 82
@@ -484,7 +490,6 @@ def create_post_card(post):
 
     card = Image.new("RGB", (card_width, card_height), "#FFFFFF")
     draw = ImageDraw.Draw(card)
-
     rounded_rectangle(draw, (1, 1, card_width - 2, card_height - 2), radius=18,
                        fill="#FFFFFF", outline="#E4E4E4", width=2)
 
@@ -495,7 +500,6 @@ def create_post_card(post):
     draw.text((name_x, 36), CARD_DISPLAY_NAME, font=FONT_NAME, fill="#1F2430")
     name_width = draw.textlength(CARD_DISPLAY_NAME, font=FONT_NAME)
     badge_x = int(name_x + name_width + 14)
-
     draw.ellipse((badge_x, 43, badge_x + 22, 65), fill="#E969A7")
     draw.text((badge_x + 5, 43), "check", font=FONT_META, fill="#FFFFFF")
     draw.text((name_x, 74), CARD_HANDLE, font=FONT_HANDLE, fill="#6B7280")
@@ -505,42 +509,68 @@ def create_post_card(post):
         draw.text((padding, y), line, font=FONT_BODY, fill="#30323A")
         y += body_line_height
 
-    if source_image or video_preview:
-        media = source_image or video_preview
+    if media_kind == "image":
         image_top = y + 12
         image_height = media_height - 28
 
-        fitted = ImageOps.fit(media, (content_width, image_height), method=Image.Resampling.LANCZOS)
-        mask = Image.new("L", (content_width, image_height), 0)
-        ImageDraw.Draw(mask).rounded_rectangle((0, 0, content_width, image_height), radius=18, fill=255)
-        card.paste(fitted, (padding, image_top), mask)
+        if source_image is not None:
+            fitted = ImageOps.fit(source_image, (content_width, image_height),
+                                   method=Image.Resampling.LANCZOS)
+            mask = Image.new("L", (content_width, image_height), 0)
+            ImageDraw.Draw(mask).rounded_rectangle(
+                (0, 0, content_width, image_height), radius=18, fill=255
+            )
+            card.paste(fitted, (padding, image_top), mask)
+        else:
+            # 下载失败时的占位框，而不是让这块区域悄悄消失
+            rounded_rectangle(
+                draw,
+                (padding, image_top, padding + content_width, image_top + image_height),
+                radius=18, fill="#F3F4F6", outline="#E4E4E4", width=2,
+            )
+            placeholder_text = "图片未能加载，请点击下方链接查看原贴"
+            text_width = draw.textlength(placeholder_text, font=FONT_META)
+            draw.text(
+                (padding + (content_width - text_width) / 2, image_top + image_height / 2 - 10),
+                placeholder_text, font=FONT_META, fill="#9CA3AF",
+            )
 
-        if post["media"]["type"] == "video":
+        y = image_top + image_height + 28
+
+    elif media_kind == "video":
+        video_top = y + 12
+        video_height = media_height - 28
+
+        if video_preview is not None:
+            fitted = ImageOps.fit(video_preview, (content_width, video_height),
+                                   method=Image.Resampling.LANCZOS)
+            mask = Image.new("L", (content_width, video_height), 0)
+            ImageDraw.Draw(mask).rounded_rectangle(
+                (0, 0, content_width, video_height), radius=18, fill=255
+            )
+            card.paste(fitted, (padding, video_top), mask)
+
             center_x = padding + content_width // 2
-            center_y = image_top + image_height // 2
+            center_y = video_top + video_height // 2
             draw.ellipse((center_x - 47, center_y - 47, center_x + 47, center_y + 47), fill="#111827")
             draw.polygon(
                 [(center_x - 12, center_y - 22), (center_x - 12, center_y + 22), (center_x + 25, center_y)],
                 fill="#FFFFFF",
             )
-
-        y = image_top + image_height + 28
-
-    elif post["media"] and post["media"]["type"] == "video":
-        video_top = y + 12
-        video_height = media_height - 28
-
-        rounded_rectangle(draw, (padding, video_top, padding + content_width, video_top + video_height),
-                           radius=18, fill="#111827")
-
-        center_x = padding + content_width // 2
-        center_y = video_top + video_height // 2
-        draw.ellipse((center_x - 50, center_y - 50, center_x + 50, center_y + 50), fill="#272C37")
-        draw.polygon(
-            [(center_x - 12, center_y - 23), (center_x - 12, center_y + 23), (center_x + 28, center_y)],
-            fill="#FFFFFF",
-        )
-        draw.text((padding + 24, video_top + video_height - 48), "VIDEO", font=FONT_VIDEO, fill="#FFFFFF")
+        else:
+            rounded_rectangle(
+                draw,
+                (padding, video_top, padding + content_width, video_top + video_height),
+                radius=18, fill="#111827",
+            )
+            center_x = padding + content_width // 2
+            center_y = video_top + video_height // 2
+            draw.ellipse((center_x - 50, center_y - 50, center_x + 50, center_y + 50), fill="#272C37")
+            draw.polygon(
+                [(center_x - 12, center_y - 23), (center_x - 12, center_y + 23), (center_x + 28, center_y)],
+                fill="#FFFFFF",
+            )
+            draw.text((padding + 24, video_top + video_height - 48), "VIDEO", font=FONT_VIDEO, fill="#FFFFFF")
 
         y = video_top + video_height + 28
 
@@ -556,7 +586,6 @@ def create_post_card(post):
     card.save(card_path, format="PNG", optimize=True)
     return card_path
 
-
 # ============================================================
 # Discord 推送
 # ============================================================
@@ -564,20 +593,15 @@ def create_post_card(post):
 def build_embeds(post, translated_text, card_filename):
     chunks = split_text(translated_text, MAX_TRANSLATED_LEN)
     embeds = []
-
     for index, chunk in enumerate(chunks):
         embed = {"color": 5763719, "description": chunk}
-
         if index == 0:
             embed["title"] = "Original Post on Truth Social "
             embed["url"] = post["url"]
             embed["image"] = {"url": f"attachment://{card_filename}"}
-
-        if post["timestamp"]:
-            embed["timestamp"] = post["timestamp"]
-
+            if post["timestamp"]:
+                embed["timestamp"] = post["timestamp"]
         embeds.append(embed)
-
     return embeds[:10]
 
 
@@ -598,17 +622,13 @@ def post_to_discord(post):
                 files={"file": (card_path.name, card_file, "image/png")},
                 timeout=60,
             )
-
         if response.status_code == 429:
             retry_after = float(response.json().get("retry_after", 2))
             time.sleep(retry_after + 1)
             return post_to_discord(post)
-
         response.raise_for_status()
-
     finally:
         card_path.unlink(missing_ok=True)
-
 
 # ============================================================
 # 主程序
@@ -632,7 +652,6 @@ def main():
             "media": None,
             "content_hash": hashlib.sha256(f"discord-test-{int(now)}".encode("utf-8")).hexdigest(),
         }
-
         post_to_discord(test_post)
         print("测试成功：已发送模拟帖子。未读取 CNN，未修改 seen_trump.json。")
         return
@@ -641,30 +660,24 @@ def main():
     new_posts = collect_new_posts(raw_posts, state)
 
     is_first_run = not state["seen"] and not state["hashes"]
-
     if is_first_run and not SEND_ON_FIRST_RUN:
         now = time.time()
         for post in new_posts:
             state["seen"][post["id"]] = now
             state["hashes"][post["content_hash"]] = now
-
         save_state(state)
         print(f"首次初始化完成：记录 {len(new_posts)} 条近期帖子，没有补发历史内容。")
         return
 
     posts_to_send = list(islice(new_posts, MAX_SEND_PER_RUN))
     sent_count = 0
-
     for post in posts_to_send:
         post_to_discord(post)
-
         sent_at = time.time()
         state["seen"][post["id"]] = sent_at
         state["hashes"][post["content_hash"]] = sent_at
-
         sent_count += 1
         save_state(state)
-
         time.sleep(DISCORD_DELAY_SECONDS)
 
     save_state(state)

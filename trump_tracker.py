@@ -19,7 +19,8 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 # ============================================================
 
 TEST_MODE = True
-TEST_MEDIA_TYPE = "image" 
+# None / "image" / "video" —— 仅在 TEST_MODE=True 时生效
+TEST_MEDIA_TYPE = "image"  
 
 DATA_URL = "https://ix.cnn.io/data/truth-social/truth_archive.json"
 
@@ -726,7 +727,7 @@ def post_to_discord(post):
 def main():
     state = load_state()
 
-   if TEST_MODE:
+    if TEST_MODE:
         now = time.time()
 
         _TEST_MEDIA_URLS = {
@@ -757,7 +758,7 @@ def main():
         post_to_discord(test_post)
         print(f"测试成功：已发送模拟帖子（media={TEST_MEDIA_TYPE}）。未读取 CNN，未修改 seen_trump.json。")
         return
-       
+
     raw_posts = fetch_posts(state)
     if raw_posts is None:
         print("CNN 数据自上次抓取后未变化（HTTP 304），本次跳过后续处理。")

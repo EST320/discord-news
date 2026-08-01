@@ -34,6 +34,7 @@ DISCORD_DELAY_SECONDS = 0.8
 MAX_POST_AGE_SECONDS = 12 * 3600
 RETENTION_SECONDS = 30 * 24 * 3600
 SEND_ON_FIRST_RUN = False
+MAX_DISCORD_RETRIES = 5
 
 MAX_TRANSLATED_LEN = 4000
 MAX_CARD_TEXT_LEN = 6000
@@ -62,8 +63,8 @@ translator = deepl.Translator(DEEPL_API_KEY)
 # static-assets-1.truthsocial.com 这个 CDN 会在 TLS 握手层面（而不是
 # 靠 User-Agent / Referer 这类应用层 header）拦截非浏览器请求 —— 这也是
 # 之前头像必须改用本地文件的原因。普通 requests/urllib3 的 TLS 指纹和
-# 真实浏览器不同，直接抓帖子里的图片大概率会被同样拦截，导致卡片里的
-# 图片“悄悄消失”。这里改用 curl_cffi 模拟 Chrome 的 TLS/HTTP2 指纹来绕开。
+# 真实浏览器不同，直接抓帖子里的图片大概率会被同样拦截。这里改用
+# curl_cffi 模拟 Chrome 的 TLS/HTTP2 指纹来绕开。
 #
 # 需要先安装：pip install curl_cffi
 # ------------------------------------------------------------
@@ -81,12 +82,13 @@ except ImportError:
     )
 
 # ============================================================
-# 状态：ID 去重 + 内容哈希去重
+# 状态：ID 去重 + 内容哈希去重 + HTTP 条件请求缓存（ETag / Last-Modified）
 # ============================================================
 
 def load_state():
+    default = {"seen": {}, "hashes": {}, "etag": None, "last_modified": None}
     if not STATE_FILE.exists():
-        return {"seen": {}, "hashes": {}}
+        return default
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
         seen = data.get("seen", {})
@@ -95,10 +97,15 @@ def load_state():
             seen = {}
         if not isinstance(hashes, dict):
             hashes = {}
-        return {"seen": seen, "hashes": hashes}
+        return {
+            "seen": seen,
+            "hashes": hashes,
+            "etag": data.get("etag"),
+            "last_modified": data.get("last_modified"),
+        }
     except (OSError, json.JSONDecodeError) as exc:
         print(f"读取状态文件失败，将以空状态启动：{exc}")
-        return {"seen": {}, "hashes": {}}
+        return default
 
 
 def save_state(state):
@@ -113,7 +120,12 @@ def save_state(state):
     }
     STATE_FILE.write_text(
         json.dumps(
-            {"seen": pruned_seen, "hashes": pruned_hashes},
+            {
+                "seen": pruned_seen,
+                "hashes": pruned_hashes,
+                "etag": state.get("etag"),
+                "last_modified": state.get("last_modified"),
+            },
             ensure_ascii=False,
             indent=2,
         ),
@@ -124,9 +136,36 @@ def save_state(state):
 # 数据抓取与帖子解析
 # ============================================================
 
-def fetch_posts():
-    response = requests.get(DATA_URL, headers=HEADERS, timeout=30)
+def fetch_posts(state):
+    """
+    带 ETag / Last-Modified 条件请求的抓取。
+
+    cron 是每 2 分钟跑一次，一天 720 次，而 Trump 不可能每次都发新内容——
+    如果远端支持条件请求，绝大多数运行会直接收到 304，我们就能跳过
+    JSON 解析 + 全量扫描 + 去重这一整套后续处理，只留一次很轻的 HTTP
+    往返。如果远端不支持 ETag/Last-Modified（没有相关响应头），这里会
+    自动退化成普通全量请求，不会有任何副作用。
+
+    返回 None 表示"数据未变化，本次无需继续处理"。
+    """
+    headers = dict(HEADERS)
+    if state.get("etag"):
+        headers["If-None-Match"] = state["etag"]
+    if state.get("last_modified"):
+        headers["If-Modified-Since"] = state["last_modified"]
+
+    response = requests.get(DATA_URL, headers=headers, timeout=30)
+
+    if response.status_code == 304:
+        state["etag"] = response.headers.get("ETag") or state.get("etag")
+        state["last_modified"] = response.headers.get("Last-Modified") or state.get("last_modified")
+        return None
+
     response.raise_for_status()
+
+    state["etag"] = response.headers.get("ETag") or state.get("etag")
+    state["last_modified"] = response.headers.get("Last-Modified") or state.get("last_modified")
+
     payload = response.json()
     if isinstance(payload, list):
         return payload
@@ -174,6 +213,8 @@ def get_first_media(item):
         url = first.strip().replace("&amp;", "&")
         preview_url = None
     elif isinstance(first, dict):
+        # 目前 CNN 的数据源里 media 都是纯字符串 URL，走不到这个分支；
+        # 保留它是为了兼容数据源未来改成带缩略图字段的结构。
         url = str(first.get("url") or "").strip().replace("&amp;", "&")
         preview_url = str(
             first.get("preview_url")
@@ -338,7 +379,7 @@ def download_image(url, timeout=20):
     """
     下载图片。优先用 curl_cffi 模拟浏览器 TLS 指纹抓取，因为
     static-assets-1.truthsocial.com 会在 TLS 握手层面拦截非浏览器请求，
-    普通 requests 经常直接被拒绝或连接被重置。
+    普通 requests 经常直接被拒绝或连接被重置。url 为空时零成本直接返回。
     """
     if not url:
         return None
@@ -402,6 +443,30 @@ def get_avatar():
     return result
 
 
+def _split_long_word(draw, word, font, max_width):
+    """
+    用二分查找切分一个单独就超过 max_width 的词（比如一长串没有空格的
+    URL）。原来逐字符线性扫描在这种情况下是 O(word_len^2)；这里每次
+    切分是 O(log word_len) 次宽度测量，总体降到 O(word_len log word_len)。
+    """
+    pieces = []
+    start = 0
+    n = len(word)
+    while start < n:
+        lo, hi = start + 1, n
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if draw.textlength(word[start:mid], font=font) <= max_width:
+                lo = mid
+            else:
+                hi = mid - 1
+        # lo 至少是 start+1：即使单个字符本身就超宽，也强制吞掉一个字符，
+        # 避免死循环（和原来的逐字符实现行为一致）。
+        pieces.append(word[start:lo])
+        start = lo
+    return pieces
+
+
 def wrap_text(draw, text, font, max_width):
     lines = []
     for paragraph in (text or "").splitlines() or [""]:
@@ -415,20 +480,20 @@ def wrap_text(draw, text, font, max_width):
             if draw.textlength(candidate, font=font) <= max_width:
                 current = candidate
                 continue
+
             if current:
                 lines.append(current)
+                current = ""
+
+            if draw.textlength(word, font=font) <= max_width:
                 current = word
                 continue
-            segment = ""
-            for char in word:
-                candidate = segment + char
-                if draw.textlength(candidate, font=font) <= max_width:
-                    segment = candidate
-                else:
-                    if segment:
-                        lines.append(segment)
-                    segment = char
-            current = segment
+
+            pieces = _split_long_word(draw, word, font, max_width)
+            for piece in pieces[:-1]:
+                lines.append(piece)
+            current = pieces[-1] if pieces else ""
+
         if current:
             lines.append(current)
     return lines
@@ -477,6 +542,9 @@ def create_post_card(post):
     if media_kind == "image":
         source_image = download_image(post["media"]["url"])
     elif media_kind == "video":
+        # 目前 CNN 数据源里视频没有单独的预览图字段（preview_url 恒为
+        # None），download_image 会立刻短路返回 None，不产生额外网络
+        # 请求。保留这行是为了在数据源未来提供缩略图时自动生效。
         video_preview = download_image(post["media"]["preview_url"])
 
     media_height = 0
@@ -605,16 +673,13 @@ def build_embeds(post, translated_text, card_filename):
     return embeds[:10]
 
 
-def post_to_discord(post):
-    translated_text = build_description(post)
-    card_path = create_post_card(post)
-
-    payload = {
-        "embeds": build_embeds(post, translated_text, card_path.name),
-        "allowed_mentions": {"parse": []},
-    }
-
-    try:
+def _send_discord_payload(payload, card_path):
+    """
+    只负责把已经准备好的 payload + 卡片文件发出去，并处理 429 重试。
+    卡片渲染、DeepL 翻译都在调用方一次性做完 —— 429 重试时不应该
+    把这些开销再重复付一遍，这里只重发 HTTP 请求本身。
+    """
+    for attempt in range(MAX_DISCORD_RETRIES):
         with card_path.open("rb") as card_file:
             response = requests.post(
                 WEBHOOK_URL,
@@ -625,8 +690,31 @@ def post_to_discord(post):
         if response.status_code == 429:
             retry_after = float(response.json().get("retry_after", 2))
             time.sleep(retry_after + 1)
-            return post_to_discord(post)
+            continue
         response.raise_for_status()
+        return
+    raise RuntimeError(f"Discord 429 重试 {MAX_DISCORD_RETRIES} 次后仍未发送成功")
+
+
+def post_to_discord(post):
+    translated_text = build_description(post)
+    card_path = create_post_card(post)
+
+    payload = {
+        "embeds": build_embeds(post, translated_text, card_path.name),
+        "allowed_mentions": {"parse": []},
+    }
+
+    if post["media"] and post["media"]["type"] == "video":
+        # 把原始视频直链放进普通消息正文，让 Discord 自己去抓取并尝试
+        # 生成可播放的内嵌预览。能不能生成取决于 Discord 的抓取服务能
+        # 不能连上 Truth Social 的 CDN（大概率可以，因为它和我们脚本
+        # 是完全不同的请求方）；就算不能内嵌，用户也至少多了一条可以
+        # 直接点开看视频的链接，不会比现在更差。
+        payload["content"] = post["media"]["url"]
+
+    try:
+        _send_discord_payload(payload, card_path)
     finally:
         card_path.unlink(missing_ok=True)
 
@@ -656,7 +744,12 @@ def main():
         print("测试成功：已发送模拟帖子。未读取 CNN，未修改 seen_trump.json。")
         return
 
-    raw_posts = fetch_posts()
+    raw_posts = fetch_posts(state)
+    if raw_posts is None:
+        print("CNN 数据自上次抓取后未变化（HTTP 304），本次跳过后续处理。")
+        save_state(state)
+        return
+
     new_posts = collect_new_posts(raw_posts, state)
 
     is_first_run = not state["seen"] and not state["hashes"]

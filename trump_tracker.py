@@ -18,9 +18,9 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 # 配置
 # ============================================================
 
-TEST_MODE = False
+TEST_MODE =True
 # None / "image" / "video" —— 仅在 TEST_MODE=True 时生效
-TEST_MEDIA_TYPE = "video"  
+TEST_MEDIA_TYPE = "image"  
 DATA_URL = "https://ix.cnn.io/data/truth-social/truth_archive.json"
  
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL_TRUMP"]

@@ -18,7 +18,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 # 配置
 # ============================================================
 
-TEST_MODE = True
+TEST_MODE = False
 # None / "image" / "video" —— 仅在 TEST_MODE=True 时生效
 TEST_MEDIA_TYPE = "video"  
 

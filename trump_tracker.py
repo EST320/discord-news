@@ -18,9 +18,10 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 # 配置
 # ============================================================
 
-TEST_MODE = False
+TEST_MODE = True
 # 仅在 TEST_MODE=True 时生效：None / "image" / "video"
 TEST_MEDIA_TYPE = "image"
+IMAGE_DELIVERY = "direct"
 
 DATA_URL = "https://ix.cnn.io/data/truth-social/truth_archive.json"
 

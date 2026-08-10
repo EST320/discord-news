@@ -14,7 +14,7 @@ OUTPUT_FILE = "earnings_calendar.png"
 DAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri")
 TIME_ORDER = {"bmo": 0, "amc": 1, "": 2}
 ICON_MAP = {"bmo": "☀️", "amc": "🌙"}
-MIN_MARKET_CAP = 5_000_000_000
+MIN_MARKET_CAP = 10_000_000_000
 MAX_COMPANIES_PER_DAY = 15
 PROFILE_REQUEST_DELAY = 1.1
 

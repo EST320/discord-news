@@ -7,7 +7,10 @@ from pathlib import Path
 
 import requests
 
-API_URL = "https://api-prod.wallstreetcn.com/apiv1/content/lives"
+# 华尔街见闻前端已迁移到 awtmt.com 这个 API 域名；旧的 api-prod.wallstreetcn.com
+# 从 2026-09-17 起对机房 IP（含 GitHub Actions）直接丢包，连不上。
+# 新域名路径、参数、返回结构与旧接口完全一致。
+API_URL = "https://api-one-wscn.awtmt.com/apiv1/content/lives"
 LIVE_URL = "https://wallstreetcn.com/live/us-stock"
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
 STATE_FILE = Path("seen.json")
@@ -20,6 +23,8 @@ FIRST_RUN_SEND = 10
 DISCORD_DELAY_SECONDS = 0.55
 RETENTION_SECONDS = 12 * 3600
 MAX_NEWS_AGE_SECONDS = 15 * 60
+API_MAX_RETRIES = 3
+API_RETRY_BACKOFF_SECONDS = 3
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -46,13 +51,23 @@ def save_state(seen):
 
 def api_get(cursor=0):
     params = {"channel": CHANNEL, "client": "pc", "cursor": cursor, "limit": PAGE_SIZE}
-    response = requests.get(API_URL, params=params, headers=HEADERS, timeout=30)
-    response.raise_for_status()
-    payload = response.json().get("data", {})
-    items = payload.get("items", [])
-    if not isinstance(items, list):
-        raise RuntimeError(f"API items 格式异常：{type(items)}")
-    return items, payload.get("next_cursor", 0)
+    last_exc = None
+    for attempt in range(1, API_MAX_RETRIES + 1):
+        try:
+            response = requests.get(API_URL, params=params, headers=HEADERS, timeout=20)
+            response.raise_for_status()
+            payload = response.json().get("data", {})
+            items = payload.get("items", [])
+            if not isinstance(items, list):
+                raise RuntimeError(f"API items 格式异常：{type(items)}")
+            return items, payload.get("next_cursor", 0)
+        except (requests.exceptions.RequestException, ValueError, RuntimeError) as exc:
+            last_exc = exc
+            if attempt < API_MAX_RETRIES:
+                wait = API_RETRY_BACKOFF_SECONDS * attempt
+                print(f"api_get 第 {attempt} 次失败（{exc!r}），{wait}s 后重试")
+                time.sleep(wait)
+    raise last_exc
 
 
 def item_to_news(item):
@@ -156,7 +171,13 @@ def main():
     seen = load_state()
     seen_ids = set(seen)
 
-    new_items = collect_new_items(seen_ids)
+    try:
+        new_items = collect_new_items(seen_ids)
+    except (requests.exceptions.RequestException, ValueError, RuntimeError) as exc:
+        # 抓取失败就跳过这一轮，两分钟后的下一次触发会补上，不让整个 job 报红
+        print(f"抓取失败，跳过本次运行：{exc!r}")
+        return
+
     to_send = new_items[-FIRST_RUN_SEND:] if not seen_ids else new_items[:MAX_SEND_PER_RUN]
 
     for news in to_send:

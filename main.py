@@ -25,6 +25,7 @@ RETENTION_SECONDS = 12 * 3600
 MAX_NEWS_AGE_SECONDS = 15 * 60
 API_MAX_RETRIES = 3
 API_RETRY_BACKOFF_SECONDS = 3
+DISCORD_MAX_RETRIES = 5
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -33,11 +34,21 @@ HEADERS = {
     "Origin": "https://wallstreetcn.com",
 }
 
+# 单个 Session 复用 TCP/TLS 连接：一次运行里要发 1 次 API 请求 + N 条 Discord 消息，
+# 复用连接比每次重新握手快，也更不容易被限流。
+SESSION = requests.Session()
+SESSION.headers.update(HEADERS)
+
 
 def load_state():
     if not STATE_FILE.exists():
         return {}
-    return json.loads(STATE_FILE.read_text(encoding="utf-8")).get("seen", {})
+    try:
+        return json.loads(STATE_FILE.read_text(encoding="utf-8")).get("seen", {})
+    except (json.JSONDecodeError, OSError) as exc:
+        # 状态文件损坏时不要直接崩掉；当成空状态继续跑，本轮会走首次运行逻辑
+        print(f"状态文件读取失败，按空状态处理：{exc!r}")
+        return {}
 
 
 def save_state(seen):
@@ -54,7 +65,7 @@ def api_get(cursor=0):
     last_exc = None
     for attempt in range(1, API_MAX_RETRIES + 1):
         try:
-            response = requests.get(API_URL, params=params, headers=HEADERS, timeout=20)
+            response = SESSION.get(API_URL, params=params, timeout=20)
             response.raise_for_status()
             payload = response.json().get("data", {})
             items = payload.get("items", [])
@@ -130,6 +141,15 @@ def collect_new_items(seen_ids):
 
         if any(n["id"] in seen_ids for n in page_news):
             break
+
+        # 本页最旧的一条都已超出时间窗口，再往后翻只会更旧，没有必要继续请求
+        oldest_ts = min(
+            (n["display_ts"] for n in page_news if n["display_ts"] is not None),
+            default=None,
+        )
+        if oldest_ts is not None and now - oldest_ts > MAX_NEWS_AGE_SECONDS:
+            break
+
         if not next_cursor or next_cursor == cursor:
             break
         cursor = next_cursor
@@ -137,7 +157,7 @@ def collect_new_items(seen_ids):
     return list(reversed(collected.values()))
 
 
-def post_to_discord(news):
+def post_to_discord(news, attempt=1):
     safe_title = re.sub(r"\s{2,}", " ", news["title"].replace("\n", " ").replace("\r", " ")).strip()
     text = f"[{safe_title}]({LIVE_URL})"
 
@@ -154,15 +174,22 @@ def post_to_discord(news):
     if news["timestamp"]:
         embed["timestamp"] = news["timestamp"]
 
-    response = requests.post(
+    response = SESSION.post(
         WEBHOOK_URL,
         json={"embeds": [embed], "allowed_mentions": {"parse": []}},
         timeout=30,
     )
 
     if response.status_code == 429:
-        time.sleep(float(response.json().get("retry_after", 2)) + 1)
-        return post_to_discord(news)
+        # 原来是无限递归，Discord 持续限流时会把栈打爆；这里限定重试次数
+        if attempt >= DISCORD_MAX_RETRIES:
+            raise RuntimeError(f"Discord 连续 {attempt} 次返回 429，放弃这条")
+        try:
+            retry_after = float(response.json().get("retry_after", 2))
+        except (ValueError, TypeError):
+            retry_after = 2.0
+        time.sleep(retry_after + 1)
+        return post_to_discord(news, attempt + 1)
 
     response.raise_for_status()
 
@@ -170,6 +197,7 @@ def post_to_discord(news):
 def main():
     seen = load_state()
     seen_ids = set(seen)
+    first_run = not seen_ids
 
     try:
         new_items = collect_new_items(seen_ids)
@@ -178,18 +206,25 @@ def main():
         print(f"抓取失败，跳过本次运行：{exc!r}")
         return
 
-    to_send = new_items[-FIRST_RUN_SEND:] if not seen_ids else new_items[:MAX_SEND_PER_RUN]
+    to_send = new_items[-FIRST_RUN_SEND:] if first_run else new_items[:MAX_SEND_PER_RUN]
 
-    for news in to_send:
-        post_to_discord(news)
-        time.sleep(DISCORD_DELAY_SECONDS)
-
-    now = time.time()
-    for news in (new_items if not seen_ids else to_send):
-        seen[news["id"]] = now
-
-    save_state(seen)
-    print(f"检测到 {len(new_items)} 条，已发送 {len(to_send)} 条。")
+    sent = 0
+    try:
+        for news in to_send:
+            post_to_discord(news)
+            # 发一条记一条：中途若抛异常，已发出的不会在下一轮被重复推送
+            seen[news["id"]] = time.time()
+            sent += 1
+            time.sleep(DISCORD_DELAY_SECONDS)
+    finally:
+        if first_run:
+            # 首次运行只补发最近几条，其余历史标记为已读，避免下一轮被当成新消息
+            now = time.time()
+            for news in new_items:
+                seen.setdefault(news["id"], now)
+        # 即使上面中途失败也要落盘，保证去重状态不丢
+        save_state(seen)
+        print(f"检测到 {len(new_items)} 条，已发送 {sent} 条。")
 
 
 if __name__ == "__main__":

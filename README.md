@@ -1,186 +1,179 @@
 # discord-news
 
-自动化新闻与事件追踪机器人集合，通过 GitHub Actions 定时抓取多个数据源（华尔街见闻快讯、Truth Social、财报日历、X/Twitter），并将格式化内容推送到指定的 Discord 频道。
+一组金融资讯采集与推送脚本：由 GitHub Actions 运行，从多个公开数据源增量拉取快讯、公告和市场指标，去重、过滤、格式化后推送到 Discord 频道。
+
+2026 年 7 月上线，持续运行至今。去重状态随每次运行提交回仓库，提交历史即运行记录。
 
 ## 功能概览
 
-| 脚本 | 数据源 | 推送内容 | 触发频率 |
+| 脚本 | 数据源 | 推送内容 | 运行频率 |
 |---|---|---|---|
-| `main.py` | 华尔街见闻美股频道 | 快讯标题 + 正文 | 每 2 分钟 |
-| `main_a.py` | 华尔街见闻 A 股频道 | 快讯标题 + 正文 | 每 2 分钟 |
-| `main_hk.py` | 华尔街见闻港股频道 | 快讯标题 + 正文 | 每 2 分钟 |
-| `trump_tracker.py` | CNN Truth Social 归档 | 中文翻译 + 英文原帖卡片图 | 每 2 分钟 |
-| `x_tracker.py` | X / Twitter 账号 | 推文中文翻译 + 原文卡片 | 定时轮询 |
-| `earnings_calendar.py` | Finnhub 财报日历 API | 下周一至周五财报日历图表 | 每周五 |
+| `main.py` | 华尔街见闻 · 美股快讯 | 标题 + 正文 | 每 2 分钟 |
+| `main_a.py` | 华尔街见闻 · A 股快讯 | 标题 + 正文 | 每 2 分钟 |
+| `main_hk.py` | 华尔街见闻 · 港股快讯 | 标题 + 正文 | 每 2 分钟 |
+| `trump_tracker.py` | CNN 维护的 Truth Social 公开归档 | 中文翻译 + 英文原帖卡片图 | 每 2 分钟 |
+| `feargreed_tracker.py` | CNN 恐惧贪婪指数、alternative.me 加密市场恐惧贪婪指数 | 指数仪表图 + 历史对比 + 较上次变化 | 定时 |
+| `earnings_calendar.py` | Finnhub 财报日历与公司概况 API | 下周一至周五的财报日历表格图 | 每周五 |
+| `backfill.py` | 华尔街见闻（三个频道） | 补发指定时间窗口内漏发的快讯 | 手动触发 |
+| `x_tracker.py` | X / Twitter 指定账号 | 推文推送 | **调试中，未上线** |
 
 ## 项目结构
 
 ```text
 discord-news/
-├── .github/
-│   └── workflows/                    # GitHub Actions 定时任务配置
-├── main.py                           # 美股快讯推送
-├── main_a.py                         # A股快讯推送
-├── main_hk.py                        # 港股快讯推送
-├── trump_tracker.py                  # Trump Truth Social 追踪器
-├── x_tracker.py                      # X/Twitter 账号追踪器（调试中）
-├── earnings_calendar.py              # 每周财报日历生成与推送
-├── inspect_wallstreetcn_tags.py      # 调试用：检查华尔街见闻数据标签
-├── seen.json                         # 美股去重状态
-├── seen_a.json                       # A股去重状态
-├── seen_hk.json                      # 港股去重状态
-├── seen_trump.json                   # Trump 追踪去重状态
-├── seen_x.json                       # X 追踪去重状态
-├── requirements.txt                  # Python 依赖
-└── README.md
+├── .github/workflows/
+│   ├── news.yml / news-a.yml / news-hk.yml   # 三个快讯频道
+│   ├── news-trump.yml                        # Truth Social 追踪
+│   ├── feargreed.yml                         # 恐惧贪婪指数
+│   ├── news-earnings.yml                     # 每周财报日历
+│   ├── backfill.yml                          # 手动补发
+│   └── news-x.yml                            # X 追踪（调试中）
+├── main.py / main_a.py / main_hk.py          # 华尔街见闻快讯
+├── trump_tracker.py                          # Truth Social 追踪
+├── feargreed_tracker.py                      # 恐惧贪婪指数
+├── earnings_calendar.py                      # 财报日历
+├── backfill.py                               # 补发工具
+├── x_tracker.py                              # X 追踪（调试中）
+├── inspect_wallstreetcn_tags.py              # 调试用：检查快讯数据字段
+├── seen*.json                                # 各脚本的去重状态
+├── assets/                                   # 卡片图素材
+└── requirements.txt
 ```
 
-## 运行原理
+## 处理流程
 
-所有脚本遵循相同的核心模式：
+各脚本遵循同一套流程：
 
-1. 抓取：从各自数据源（REST API 或归档 JSON）拉取最新条目。
-2. 去重：将条目 ID（部分脚本额外用正文哈希）与本地状态文件（seen*.json）比对，过滤已发送内容。
-3. 时间窗口过滤：跳过发布时间过旧或时间异常的条目，避免历史内容被误发。
-4. 格式化：翻译（DeepL）、生成图片卡片（Pillow / Plotly）或直接组装 Discord Embed。
-5. 推送：通过 Discord Webhook 发送消息，仅在推送成功后才写回去重状态。
-6. 状态持久化：GitHub Actions 在每次运行后将更新后的 seen*.json 提交回仓库，供下次运行读取。
+1. **增量拉取**：按游标分页请求数据源，遇到已处理过的条目或超出时间窗口的条目即停止翻页，不做全量扫描。
+2. **去重**：用条目 ID 与状态文件比对；Truth Social 归档会重复返回同一帖子，因此额外用正文哈希做第二层去重。
+3. **时间窗口过滤**：跳过发布时间过旧或时间戳缺失的条目（快讯 15 分钟，Truth Social 12 小时），防止历史内容被误推。
+4. **格式化**：翻译（DeepL）、生成图片（Pillow / Plotly / Matplotlib），组装 Discord Embed。
+5. **推送**：通过 Discord Webhook 发送。**每条推送成功后才把该条写入状态**，中途失败时已发出的不会重复，未发出的下轮补上。
+6. **状态持久化**：运行结束后把状态文件提交回仓库，供下一次运行读取。
 
-## 环境依赖
-```text
-pip install -r requirements.txt
-```
-主要依赖：
+## 可靠性设计
 
-- requests — HTTP 请求
-- deepl — 中文翻译（Trump / X 追踪器）
-- Pillow — 生成原帖卡片图
-- plotly + kaleido — 生成财报日历表格图
-
-## 环境变量 / Secrets
-
-在 GitHub 仓库的 Settings → Secrets and variables → Actions 中配置：
-
-| Secret 名称 | 用途 |
+| 问题 | 处理方式 |
 |---|---|
-| `DISCORD_WEBHOOK_URL` | 美股快讯频道 Webhook |
-| `DISCORD_WEBHOOK_URL_A` | A股快讯频道 Webhook |
-| `DISCORD_WEBHOOK_URL_HK` | 港股快讯频道 Webhook |
-| `DISCORD_WEBHOOK_URL_TRUMP` | Trump 追踪频道 Webhook |
-| `DISCORD_WEBHOOK_URL_X` | X 追踪频道 Webhook |
-| `DISCORD_WEBHOOK_URL_EARNINGS` | 财报日历频道 Webhook |
-| `DEEPL_API_KEY` | DeepL 翻译 API Key |
-| `FINNHUB_API_KEY` | Finnhub 财报数据 API Key |
+| 数据源接口临时失败 | 最多重试 3 次，线性退避；仍失败则跳过本轮，由下一轮补上，不让 workflow 报错 |
+| Discord 限流（HTTP 429） | 按返回的 `retry_after` 等待后重试，最多 5 次，避免持续限流时无限重试 |
+| 中途异常 | 状态写入放在 `finally` 中，已发送的记录一定落盘 |
+| 状态文件损坏 | 读取失败时按空状态处理，走首次运行逻辑，不中断 |
+| 首次运行 | 快讯只补发最近 10 条，其余标记为已读；Truth Social 只建立去重基线，不补发历史 |
+| 状态文件增长 | 按保留期自动裁剪（快讯 12 小时，Truth Social 30 天） |
+| 多次运行并发写状态 | 快讯和 Truth Social 的 workflow 设置 `concurrency`，同一脚本串行执行；提交状态前 `git pull --rebase`，推送冲突时随机等待后重试 |
+| 断档后漏发 | `backfill.py` 按时间窗口补发，跳过已记录的 ID，支持 `DRY_RUN` 试运行 |
+
+## 设计取舍
+
+### 触发方式：外部定时服务调用 `workflow_dispatch`
+
+快讯要求约 2 分钟一次的稳定轮询。GitHub Actions 自带的 `schedule` 在负载高时会延迟甚至跳过，达不到这个频率，所以用外部定时服务（cron-job.org）调用 GitHub REST API 触发 workflow：
+
+```text
+cron-job.org 每 N 分钟发起 POST
+  → POST /repos/{owner}/discord-news/actions/workflows/{workflow}.yml/dispatches   body: {"ref": "main"}
+  → workflow 运行脚本 → 推送 Discord → 提交状态文件
+```
+
+另一个好处是调整频率、暂停或恢复任务不需要改代码。目前只有 `news-trump.yml` 额外保留了 `schedule` 作为兜底，其余 workflow 仅由 `workflow_dispatch` 触发，也可以在 GitHub 页面上手动运行调试。
+
+配置要点：
+
+1. 生成一个仅对本仓库有 Actions 写权限的 fine-grained Personal Access Token。
+2. 在定时服务里创建 POST 任务，请求头：
+   ```text
+   Authorization: Bearer YOUR_GITHUB_TOKEN
+   Accept: application/vnd.github+json
+   ```
+3. 请求体固定为 `{"ref": "main"}`。
+
+### 状态存在仓库里
+
+- **好处**：零成本、不需要额外的数据库或服务；状态变化有完整的历史记录，出问题时可以直接回看。
+- **代价**：每次运行都产生一条提交，仓库提交历史被刷屏、体积持续增长；多个 workflow 同时写入需要处理冲突（见上表）。
+- **后续**：规模再扩大时，会把状态迁到 SQLite 或键值存储，只把代码留在仓库里。
+
+## 状态文件格式
+
+记录每个 ID（以及正文哈希）首次处理的时间，超过保留期自动删除：
+
+```json
+{
+  "seen":   { "1234567890": 1784326800.12 },
+  "hashes": { "a1b2c3...": 1784326800.12 }
+}
+```
+
+`hashes` 字段只有 `trump_tracker.py` 使用。状态文件可以安全地重置为 `{"seen": {}}`：脚本会走首次运行逻辑，不会批量补发历史内容。
 
 ## 各脚本说明
 
-### 华尔街见闻快讯（main.py / main_a.py / main_hk.py）
+### 华尔街见闻快讯（`main.py` / `main_a.py` / `main_hk.py`）
 
-- 分别对接美股、A股、港股三个直播频道 API。
-- 按 RETENTION_SECONDS 定期裁剪去重状态，避免状态文件无限增长。
-- 首次运行会发送最近若干条作为初始化，后续仅推送新增内容。
+- 对接美股、A 股、港股三个快讯频道，接口地址为 `api-one-wscn.awtmt.com`（华尔街见闻网页端当前使用的接口域名）。
+- 每轮最多翻 10 页、推送 100 条。
 
-### Trump Truth Social 追踪器（trump_tracker.py）
+### Truth Social 追踪（`trump_tracker.py`）
 
-- 数据源为 CNN 维护的 Truth Social 公开归档（不直接访问 truthsocial.com，规避 Cloudflare 验证）。
-- 使用 ID + 正文哈希双重去重，防止归档重复返回同一帖子。
-- 用 Pillow 生成仿官方样式的英文原帖卡片图，中文翻译显示在 Discord Embed 描述中。
-- Embed 标题为可点击链接，跳转回 Truth Social 原帖地址。
-- 首次部署默认只建立去重基线，不补发历史内容（SEND_ON_FIRST_RUN = False）。
+- 数据源为 CNN 维护的 Truth Social 公开归档 JSON。
+- ID + 正文哈希双重去重。
+- 英文原帖渲染为卡片图，DeepL 中文翻译放在 Embed 描述中，标题链接回原帖。
 
-### X / Twitter 追踪器（x_tracker.py）— 调试中
+### 恐惧贪婪指数（`feargreed_tracker.py`）
 
-- 通过 RSS 桥接方式获取指定账号最新推文，规避官方 API 高昂的读取成本。
-- 复用与 Trump 追踪器相同的去重与卡片生成架构。
+- 同时拉取 CNN 股市恐惧贪婪指数和 alternative.me 加密市场恐惧贪婪指数。
+- 用 Matplotlib 生成仪表图，附历史值对比和较上次的变化说明。
 
-### 财报日历（earnings_calendar.py）
+### 财报日历（`earnings_calendar.py`）
 
-- 每周五运行，抓取下周一至周五的财报日历（而非当前周），确保用户有完整一周的提前准备时间。
-- 通过 Finnhub 公司概况接口按市值过滤（默认 50 亿美元以上），避免推送过多小盘股信息。
-- 使用 Plotly 生成表格图，按 BMO（开盘前）/ AMC（收盘后）分类排序。
+- 每周五运行，拉取**下周**一至周五的财报日历，留出一周准备时间。
+- 通过 Finnhub 公司概况接口按市值过滤，只保留 100 亿美元以上的公司。
+- 按盘前（BMO）、盘后（AMC）分组，组内按市值排序，用 Plotly 生成表格图。
 
-## 本地测试
+### 补发工具（`backfill.py`）
 
-各脚本均支持在本地直接运行，需先设置好对应环境变量：
-```text
-export DISCORD_WEBHOOK_URL_TRUMP="your_webhook_url"
-export DEEPL_API_KEY="your_deepl_key"
-python trump_tracker.py
+- 独立脚本，不依赖、也不修改三个主脚本。
+- 参数：`HOURS`（回溯小时数）、`CHANNELS`（`us,a,hk` 任选）、`DRY_RUN`（只列出待补发条目，不发送）。
+- 可在本地运行，也可以通过 `backfill.yml` 在 GitHub 页面手动触发。
+
+### X 追踪（`x_tracker.py`）— 调试中
+
+尚未上线，目前没有稳定可用的数据获取方式。
+
+## 本地运行
+
+```bash
+pip install -r requirements.txt
+
+export DISCORD_WEBHOOK_URL="your_webhook_url"
+python main.py
+
+# 补发试运行：只列出最近 6 小时美股、港股的漏发条目，不发送
+HOURS=6 CHANNELS=us,hk DRY_RUN=true python backfill.py
 ```
-多数脚本内置 TEST_MODE 开关，可发送模拟消息验证 Webhook、翻译、图片生成链路是否正常，而不影响真实去重状态：
-```text
-TEST_MODE = True
-```
-## 触发方式：为什么不用 GitHub 原生 schedule
 
-本项目的 workflow 文件里保留了 schedule 字段作为兜底，但实际生产环境的定时触发并不依赖 GitHub Actions 自带的 cron，而是使用第三方定时任务服务（如 cron-job.org）通过 HTTP 请求主动调用 workflow_dispatch API 来触发运行。
+`trump_tracker.py` 和 `feargreed_tracker.py` 内置 `TEST_MODE` 开关，打开后发送模拟消息，用于验证 Webhook、翻译和出图链路，不影响真实状态。
 
-### 为什么不用 GitHub 自带的 schedule
+## 环境变量（GitHub Secrets）
 
-- 延迟不可控：GitHub 官方文档明确说明，schedule 触发的 workflow 在负载高峰期可能延迟数分钟到数十分钟执行，甚至被跳过，这对于要求"每 2 分钟"这种高频轮询的快讯推送场景是不可接受的。
-- 免费额度限制：schedule 事件在私有仓库上会计入 Actions 分钟数配额，高频轮询（每 2 分钟一次，一天 720 次）容易迅速耗尽额度。
-- 无法灵活暂停/调整：GitHub 的 cron 表达式修改需要提交代码变更，而第三方定时服务可以在网页后台直接调整触发频率、暂停或恢复任务，不需要改动仓库文件。
+| 名称 | 用途 |
+|---|---|
+| `DISCORD_WEBHOOK_URL` | 美股快讯频道 |
+| `DISCORD_WEBHOOK_URL_A` | A 股快讯频道 |
+| `DISCORD_WEBHOOK_URL_HK` | 港股快讯频道 |
+| `DISCORD_WEBHOOK_URL_TRUMP` | Truth Social 追踪频道 |
+| `DISCORD_WEBHOOK_URL_FEARGREED` | 恐惧贪婪指数频道 |
+| `DISCORD_WEBHOOK_URL_EARNINGS` | 财报日历频道 |
+| `DEEPL_API_KEY` | DeepL 翻译 |
+| `FINNHUB_API_KEY` | Finnhub 财报与公司数据 |
 
-### 实际触发链路
-```text
-第三方定时服务（如 cron-job.org）
-每隔 N 分钟发起一次 HTTP POST 请求
-GitHub REST API
-POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches
-触发对应 workflow 的 workflow_dispatch 事件
-Actions 运行器执行 Python 脚本 → 推送 Discord → 提交状态文件
-```
-### 配置方式
+## 已知局限与后续计划
 
-1. 在 GitHub 生成一个具备 repo 权限的 Personal Access Token (PAT)。
-2. 在第三方定时服务（如 cron-job.org）创建一个定时任务，设置请求方式为 POST，目标地址为：
-```text
-https://api.github.com/repos/{owner}/discord-news/actions/workflows/{workflow文件名}.yml/dispatches
-```
-3. 请求头部需包含：
-```text
-Authorization: token YOUR_GITHUB_PAT
-Accept: application/vnd.github+json
-```
-4. 请求体固定为：
-```text
-{"ref": "main"}
-```
-5. 根据脚本的实际需求设置轮询间隔（快讯类建议 2 分钟一次，Trump/X 追踪器可视情况调整，财报日历仅需每周五一次）。
+- `main.py`、`main_a.py`、`main_hk.py` 只有频道配置不同，计划合并为一个按配置运行的脚本（`backfill.py` 已采用这种写法）。
+- 目前没有单元测试，计划先为去重、时间窗口过滤和状态裁剪补测试。
+- 状态存储迁出仓库（见「设计取舍」）。
 
-### workflow 文件中的 schedule 字段用途
+## 说明
 
-.github/workflows/ 中保留的 schedule 配置仅作为备用兜底机制——即便第三方定时服务临时失效或未配置，workflow 仍能依赖 GitHub 自带调度继续运行（尽管存在延迟风险）。所有 workflow 同时保留 workflow_dispatch，这正是第三方服务发起触发所依赖的入口，也支持在 GitHub 网页上手动点击运行以便调试。
-
-## 状态文件维护
-
-seen*.json 采用"ID + 时间戳"结构，并按 RETENTION_SECONDS 自动裁剪过期记录：
-```text
-{
-  "seen": {
-    "1234567890": 1784326800.12
-  },
-  "hashes": {
-    "a1b2c3...": 1784326800.12
-  }
-}
-```
-如状态文件异常膨胀（如意外积累数万条记录），可安全地重置为空结构以重新初始化，不会导致历史内容被批量补发（前提是对应脚本的 SEND_ON_FIRST_RUN 设为 False）：
-```text
-{
-  "seen": {},
-  "hashes": {}
-}
-```
-## 许可
-
-本项目仅供个人学习与自动化流程演示使用。所抓取的数据版权归原数据源所有方所有。
-
-## 支持与反馈
-
-如果这个项目对你有帮助，欢迎在 Patreon 上支持后续维护与更新：
-
-[![Support on Patreon](https://img.shields.io/badge/Patreon-支持我-F96854?style=for-the-badge&logo=patreon&logoColor=white)](https://www.patreon.com/EST320)
-
-遇到部署或调试问题，也欢迎通过 Discord 联系我：`esta_a`
-
+本项目用于个人学习和自动化流程实践。所有数据的版权归原数据源所有。

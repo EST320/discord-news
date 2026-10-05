@@ -7,3 +7,6 @@ __pycache__/
 trump_cards/
 feargreed_charts/
 earnings_calendar.png
+
+# Checkout of the `state` branch (tracker dedup state)
+state/

@@ -4,7 +4,7 @@
 
 Financial news and market-indicator trackers that run on GitHub Actions and post to Discord. Each tracker pulls incrementally from a public data source, deduplicates, filters, formats, and delivers through a Discord webhook.
 
-In production since July 2026. Deduplication state is committed back to the repository after every run, so the commit history doubles as the run log.
+In production since July 2026. Deduplication state is committed to a dedicated [`state`](https://github.com/EST320/discord-news/tree/state) branch after every run, so that branch's history doubles as the run log while `main` holds only code.
 
 ## Trackers
 
@@ -29,7 +29,7 @@ flowchart LR
     dedup --> filter[Drop stale items]
     filter --> format[Translate / render image / build embed]
     format --> discord[Discord webhook]
-    discord --> commit[Commit state back to repo]
+    discord --> commit[Commit state to the state branch]
 ```
 
 1. **Incremental fetch.** Page through the source by cursor and stop at the first already-seen item or the first page that falls outside the age window. No full scans.
@@ -37,7 +37,7 @@ flowchart LR
 3. **Age filter.** Skip items that are too old or have no timestamp (15 minutes for flash news, 12 hours for Truth Social), so historical content is never pushed by accident.
 4. **Format.** Translate with DeepL, render images with Pillow / Matplotlib / Plotly, and build the Discord embed.
 5. **Deliver.** Post through a Discord webhook. An item is written to state **only after it has been delivered**, so a failure midway neither repeats what was sent nor loses what wasn't.
-6. **Persist.** The workflow commits the state file back to the repository for the next run to read.
+6. **Persist.** The workflow commits the state file to the `state` branch for the next run to read.
 
 ## Repository layout
 
@@ -61,7 +61,7 @@ discord-news/
 │   └── paths.py                              # Repo-relative state/ and assets/ paths
 ├── scripts/
 │   └── inspect_wallstreetcn_tags.py          # Debug helper: dump raw API fields
-├── state/                                    # Dedup state, one JSON file per tracker
+├── state/                                    # Not on main: checkout of the `state` branch (one JSON file per tracker)
 ├── assets/                                   # Static images used in generated cards
 ├── tests/
 └── requirements.txt
@@ -91,7 +91,7 @@ Flash news needs a steady poll roughly every 2 minutes. GitHub Actions' built-in
 ```text
 cron-job.org, every N minutes
   → POST /repos/{owner}/discord-news/actions/workflows/{workflow}.yml/dispatches   body: {"ref": "main"}
-  → workflow runs the tracker → posts to Discord → commits the state file
+  → workflow runs the tracker → posts to Discord → commits the state file to the state branch
 ```
 
 A side benefit is that changing the cadence, pausing or resuming a tracker needs no code change. Only `news-trump.yml` also keeps a `schedule` trigger as a fallback; every other workflow runs on `workflow_dispatch` alone, which also allows manual runs from the Actions page for debugging.
@@ -108,15 +108,18 @@ Setup:
    ```
 3. Use `{"ref": "main"}` as the request body.
 
-### State lives in the repository
+### State lives on a separate `state` branch
 
-- **Upside.** Zero cost and no database or extra service to run. Every state change is versioned, so problems can be traced back through history.
-- **Cost.** Every run that sends something produces a commit, which floods the history and grows the repository; concurrent workflows need conflict handling (see the table above).
-- **Next step.** If this grows further, state moves to SQLite or a key-value store and only code stays in the repository.
+Each workflow checks out `main` for the code and the `state` branch into `state/`, runs the tracker, then commits and pushes from inside `state/`.
+
+- **Upside.** Zero cost and no database or extra service to run. Every state change is versioned, so problems can be traced back through that branch's history.
+- **Why a separate branch.** State used to be committed to `main`, where roughly 700 automated commits a day buried the code history. Keeping it on its own branch leaves `main` readable.
+- **Cost.** The repository still grows with every run, and concurrent workflows pushing to the same branch need conflict handling (see the table above).
+- **Next step.** If this grows further, state moves to SQLite or a key-value store.
 
 ## State file format
 
-Each file under `state/` records when an ID (and, for Truth Social, a content hash) was first handled. Entries past the retention period are dropped on the next save.
+Each file on the `state` branch records when an ID (and, for Truth Social, a content hash) was first handled. Entries past the retention period are dropped on the next save.
 
 ```json
 {
@@ -125,7 +128,7 @@ Each file under `state/` records when an ID (and, for Truth Social, a content ha
 }
 ```
 
-Only `truth_social` uses `hashes`. `state/seen_feargreed.json` instead stores the last posted value of each index. A `seen` file can safely be reset to `{"seen": {}}`: the tracker takes its first-run path and does not flood the channel with history.
+Only `truth_social` uses `hashes`. `seen_feargreed.json` instead stores the last posted value of each index. A `seen` file can safely be reset to `{"seen": {}}`: the tracker takes its first-run path and does not flood the channel with history.
 
 ## Tracker notes
 
@@ -177,6 +180,12 @@ HOURS=6 CHANNELS=us,hk DRY_RUN=true python -m discord_news.backfill
 python -m unittest discover -s tests -v
 ```
 
+A fresh clone starts with an empty `state/` directory, so trackers take their first-run path. To run against the live state instead, check the branch out there first:
+
+```bash
+git worktree add state state
+```
+
 `truth_social` and `fear_greed` have a `TEST_MODE` switch near the top of the file. When enabled, they send a sample message to verify the webhook, translation and image pipeline without touching real state.
 
 ## Configuration (GitHub Secrets)
@@ -196,7 +205,7 @@ python -m unittest discover -s tests -v
 
 - Tests cover only the Wallstreetcn tracker (parsing, dedup, age window, state pruning, failure handling). The other trackers are next.
 - `truth_social`, `fear_greed` and `earnings_calendar` retry Discord 429 responses without an upper bound, and each carries its own copy of the webhook-posting code. A shared Discord client with bounded retries would fix both.
-- Move state out of the repository (see [Design decisions](#design-decisions)).
+- Move state out of git entirely (see [Design decisions](#design-decisions)).
 
 ## Disclaimer
 

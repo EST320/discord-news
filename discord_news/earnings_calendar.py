@@ -1,6 +1,6 @@
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import requests
 import plotly.graph_objects as go
@@ -21,11 +21,13 @@ PROFILE_REQUEST_DELAY = 1.1
 
 def get_next_week_range():
     """
-    在周五运行 workflow 时，本周一到本周五已经是"当前周"。
-    直接加 7 天锁定"下周一"到"下周五"，
-    不依赖运行的具体星期几或具体时间。
+    Return next week's Monday and Friday.
+
+    The workflow runs on Fridays, when Monday-Friday of this week is already
+    the "current week". Adding 7 days to this week's Monday pins the range to
+    next week regardless of the weekday or time the script actually runs.
     """
-    today = datetime.utcnow().date()
+    today = datetime.now(timezone.utc).date()
     this_monday = today - timedelta(days=today.weekday())
     next_monday = this_monday + timedelta(days=7)
     next_friday = next_monday + timedelta(days=4)
@@ -44,9 +46,10 @@ def fetch_earnings(start, end):
 
 def fetch_profile(symbol, cache):
     """
-    cache 命中时 O(1) 直接返回，避免重复请求同一 symbol。
-    同一财报日历里，同一家公司理论上只会出现一次，
-    但缓存仍保留以防 API 返回重复条目。
+    Fetch a company's name and market cap, caching by symbol.
+
+    A company should appear only once in a given earnings calendar, but the
+    cache guards against the API returning duplicate entries.
     """
     if symbol in cache:
         return cache[symbol]
@@ -68,8 +71,8 @@ def fetch_profile(symbol, cache):
 
 def group_by_day(entries, monday):
     """
-    单次遍历 entries（O(n)），日期越界或无 symbol 直接跳过，
-    避免不必要的 API 调用。
+    Group entries by weekday in a single pass. Entries outside the week or
+    without a symbol are skipped before any profile request is made.
     """
     grouped = {day: [] for day in DAY_LABELS}
     profile_cache = {}
@@ -178,18 +181,18 @@ def main():
     entries = fetch_earnings(monday, friday)
 
     if not entries:
-        print(f"{monday} 至 {friday} 没有财报数据。")
+        print(f"No earnings data for {monday} to {friday}.")
         return
 
     grouped = group_by_day(entries, monday)
 
     if not build_chart(grouped, monday):
-        print("筛选后没有市值达标的公司。")
+        print("No companies above the market-cap threshold after filtering.")
         return
 
     post_to_discord()
     total = sum(len(v) for v in grouped.values())
-    print(f"已发送 {monday} 至 {friday} 财报日历，共 {total} 家公司。")
+    print(f"Posted earnings calendar for {monday} to {friday}: {total} companies.")
 
 
 if __name__ == "__main__":

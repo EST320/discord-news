@@ -12,6 +12,8 @@ from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
 import requests
 
+from discord_news.paths import STATE_DIR
+
 # ============================================================
 # Config
 # ============================================================
@@ -23,7 +25,7 @@ CRYPTO_URL = "https://api.alternative.me/fng/?limit=35"
 
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL_FEARGREED"]
 
-STATE_FILE = Path("seen_feargreed.json")
+STATE_FILE = STATE_DIR / "seen_feargreed.json"
 CHART_DIR = Path("feargreed_charts")
 
 HEADERS = {

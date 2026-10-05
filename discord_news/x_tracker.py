@@ -1,11 +1,17 @@
+"""X / Twitter tracker (experimental, not in production).
+
+Relies on snscrape, which no longer returns data reliably.
+"""
+
 import json
 import os
 import time
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import timezone
 
 import requests
 import snscrape.modules.twitter as sntwitter
+
+from discord_news.paths import STATE_DIR
 
 WEBHOOK_MAP = {
     "TrendSpider": os.environ["DISCORD_WEBHOOK_URL_TRENDSPIDER"],
@@ -13,7 +19,7 @@ WEBHOOK_MAP = {
     "ArtofSpecuycky": os.environ["DISCORD_WEBHOOK_URL_SPECUYCKY"],
 }
 
-STATE_FILE = Path("seen_x.json")
+STATE_FILE = STATE_DIR / "seen_x.json"
 
 MAX_POSTS_PER_USER = 5
 MAX_SEND_PER_RUN_PER_USER = 30
@@ -57,7 +63,7 @@ def fetch_user_posts(username):
                 "media_url": tweet.media[0].fullUrl if tweet.media else None,
             })
     except Exception as e:
-        print(f"抓取 @{username} 失败: {e}")
+        print(f"Failed to fetch @{username}: {e}")
     return posts
 
 
@@ -111,7 +117,7 @@ def process_user(username, webhook_url, seen, is_first_run):
     for post in new_posts:
         seen[post["id"]] = now
 
-    print(f"@{username}: 检测到 {len(new_posts)} 条,已发送 {len(to_send)} 条。")
+    print(f"@{username}: found {len(new_posts)} new post(s), sent {len(to_send)}.")
 
 
 def main():

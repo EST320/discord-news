@@ -1,9 +1,16 @@
+"""Debug helper: dump raw Wallstreetcn list and detail payloads for a few items
+per channel, to see which fields could be used to classify news by market.
+
+Usage:
+    python scripts/inspect_wallstreetcn_tags.py
+"""
+
 import json
 import time
 
 import requests
 
-API_URL = "https://api-prod.wallstreetcn.com/apiv1/content/lives"
+API_URL = "https://api-one-wscn.awtmt.com/apiv1/content/lives"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -13,9 +20,9 @@ HEADERS = {
 }
 
 CHANNELS = {
-    "美股": "us-stock-channel",
-    "A股": "a-stock-channel",
-    "港股": "hk-stock-channel",
+    "US": "us-stock-channel",
+    "A-share": "a-stock-channel",
+    "HK": "hk-stock-channel",
 }
 
 ITEMS_PER_CHANNEL = 3
@@ -40,7 +47,7 @@ def get_live_items(channel):
     items = data.get("items", [])
 
     if not isinstance(items, list):
-        raise RuntimeError(f"{channel} 返回的 items 不是列表：{type(items)}")
+        raise RuntimeError(f"{channel} returned non-list items: {type(items)}")
 
     return items
 
@@ -69,26 +76,27 @@ def inspect_item(source_market, item):
     display_time = item.get("display_time")
 
     print("\n" + "=" * 100)
-    print(f"来源频道：{source_market}")
-    print(f"新闻 ID：{news_id}")
-    print(f"标题：{title}")
-    print(f"时间戳：{display_time}")
-    print(f"正文前 300 字：{content[:300]}")
+    print(f"Source channel: {source_market}")
+    print(f"News ID: {news_id}")
+    print(f"Title: {title}")
+    print(f"Timestamp: {display_time}")
+    print(f"First 300 chars of content: {content[:300]}")
 
-    # 先输出列表接口的完整 item，确认列表层是否已经有 tags/symbols/channel 等字段。
-    print_json("列表接口完整 item", item)
+    # Dump the full list-endpoint item first, to see whether tags/symbols/channel
+    # fields are already present at the list level.
+    print_json("Full list-endpoint item", item)
 
     if not news_id:
-        print("没有新闻 ID，跳过详情查询。")
+        print("No news ID, skipping the detail lookup.")
         return
 
     try:
         detail = get_live_detail(news_id)
     except requests.RequestException as exc:
-        print(f"详情接口请求失败：{exc}")
+        print(f"Detail request failed: {exc}")
         return
 
-    # 重点输出我们可能用来做市场识别的字段。
+    # Highlight the fields that might identify the market.
     candidate_fields = {
         key: detail.get(key)
         for key in (
@@ -116,29 +124,29 @@ def inspect_item(source_market, item):
         if key in detail
     }
 
-    print_json("详情接口候选分类字段", candidate_fields)
-    print_json("详情接口完整 data", detail)
+    print_json("Detail-endpoint candidate classification fields", candidate_fields)
+    print_json("Full detail-endpoint data", detail)
 
 
 def main():
     for market_name, channel in CHANNELS.items():
         print("\n" + "#" * 100)
-        print(f"开始检查：{market_name} / {channel}")
+        print(f"Inspecting: {market_name} / {channel}")
         print("#" * 100)
 
         try:
             items = get_live_items(channel)
         except requests.RequestException as exc:
-            print(f"列表接口请求失败：{exc}")
+            print(f"List request failed: {exc}")
             continue
 
-        print(f"该频道本次拿到 {len(items)} 条列表消息。")
+        print(f"Got {len(items)} list item(s) for this channel.")
 
         for item in items:
             inspect_item(market_name, item)
             time.sleep(DETAIL_DELAY_SECONDS)
 
-    print("\n检查结束。请把日志中每个“详情接口候选分类字段”贴回来。")
+    print("\nDone. See each \"Detail-endpoint candidate classification fields\" block above.")
 
 
 if __name__ == "__main__":

@@ -14,9 +14,11 @@ import deepl
 import requests
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+from discord_news.paths import ASSETS_DIR, STATE_DIR
+
 
 # ============================================================
-# 配置
+# Config
 # ============================================================
 
 TEST_MODE = False
@@ -25,9 +27,9 @@ DATA_URL = "https://ix.cnn.io/data/truth-social/truth_archive.json"
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL_TRUMP"]
 DEEPL_API_KEY = os.environ["DEEPL_API_KEY"]
 
-STATE_FILE = Path("seen_trump.json")
+STATE_FILE = STATE_DIR / "seen_trump.json"
 CARD_DIR = Path("trump_cards")
-LOCAL_AVATAR_PATH = Path("assets/trump_avatar.jpg")
+LOCAL_AVATAR_PATH = ASSETS_DIR / "trump_avatar.jpg"
 
 MAX_SEND_PER_RUN = 20
 DISCORD_DELAY_SECONDS = 0.8
@@ -58,7 +60,7 @@ translator = deepl.Translator(DEEPL_API_KEY)
 
 
 # ============================================================
-# 状态：ID 去重 + 内容哈希去重
+# State: dedup by post ID + content hash
 # ============================================================
 
 def load_state():
@@ -78,7 +80,7 @@ def load_state():
         return {"seen": seen, "hashes": hashes}
 
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"读取状态文件失败，将以空状态启动：{exc}")
+        print(f"Failed to read state file, starting with empty state: {exc}")
         return {"seen": {}, "hashes": {}}
 
 
@@ -105,7 +107,7 @@ def save_state(state):
 
 
 # ============================================================
-# 数据抓取与帖子解析
+# Fetching and post parsing
 # ============================================================
 
 def fetch_posts():
@@ -119,7 +121,7 @@ def fetch_posts():
         posts = payload.get("posts", [])
         return posts if isinstance(posts, list) else []
 
-    raise RuntimeError(f"CNN 数据格式异常：{type(payload)}")
+    raise RuntimeError(f"Unexpected CNN data format: {type(payload)}")
 
 
 def parse_timestamp(value):
@@ -250,16 +252,16 @@ def collect_new_posts(raw_posts, state):
         if post["id"] in seen_ids:
             continue
         if post["content_hash"] in seen_hashes:
-            print(f"跳过重复正文：{post['id']}")
+            print(f"Skipping duplicate content: {post['id']}")
             continue
         if post["created_ts"] is None:
-            print(f"跳过无法解析时间的帖子：{post['id']}")
+            print(f"Skipping post with unparseable timestamp: {post['id']}")
             continue
 
         age_seconds = now - post["created_ts"]
 
         if age_seconds < -600:
-            print(f"跳过时间异常帖子：{post['id']}")
+            print(f"Skipping post with a timestamp in the future: {post['id']}")
             continue
         if age_seconds > MAX_POST_AGE_SECONDS:
             continue
@@ -270,7 +272,7 @@ def collect_new_posts(raw_posts, state):
 
 
 # ============================================================
-# DeepL 中文翻译
+# DeepL translation (English -> Chinese)
 # ============================================================
 
 def translate_text(text):
@@ -281,10 +283,10 @@ def translate_text(text):
         result = translator.translate_text(text, source_lang="EN", target_lang="ZH")
         return result.text.strip() or None
     except deepl.DeepLException as exc:
-        print(f"DeepL 翻译失败，回退英文原文：{exc}")
+        print(f"DeepL translation failed, falling back to the English original: {exc}")
         return None
     except Exception as exc:
-        print(f"翻译未知错误，回退英文原文：{exc}")
+        print(f"Unexpected translation error, falling back to the English original: {exc}")
         return None
 
 
@@ -292,6 +294,9 @@ def build_description(post):
     if post["content"]:
         translated = translate_text(post["content"])
         return (translated or post["content"])[:MAX_TRANSLATED_LEN]
+    # Media-only posts have nothing to translate. These placeholders are shown
+    # in the Chinese-language channel, so they stay in Chinese
+    # ("Trump posted a video / an image / a post.").
     if post["media"] and post["media"]["type"] == "video":
         return "特朗普发布了一段视频。"
     if post["media"]:
@@ -306,7 +311,7 @@ def split_text(text, limit):
 
 
 # ============================================================
-# 生成"原帖卡片图"
+# Rendering the original post as a card image
 # ============================================================
 
 def get_font(size, bold=False):
@@ -344,7 +349,7 @@ def download_image(url, timeout=20):
         response.raise_for_status()
         return Image.open(io.BytesIO(response.content)).convert("RGB")
     except Exception as exc:
-        print(f"图片下载失败：{exc}")
+        print(f"Image download failed: {exc}")
         return None
 
 
@@ -363,10 +368,11 @@ _AVATAR_IMAGE = None
 
 def get_avatar():
     """
-    头像固定使用本地文件 assets/trump_avatar.jpg，
-    不再请求 truthsocial.com 的 CDN（该 CDN 会在 TLS 握手层面
-    拦截非浏览器请求，导致每次运行都 fallback 成默认头像）。
-    只在首次调用时读取磁盘并缓存到内存，避免重复 I/O。
+    Return the circular avatar, always loaded from assets/trump_avatar.jpg.
+
+    The truthsocial.com CDN is no longer requested: it blocks non-browser
+    clients at the TLS handshake, so every run fell back to the default
+    avatar. The file is read once and cached in memory.
     """
     global _AVATAR_IMAGE
 
@@ -377,10 +383,10 @@ def get_avatar():
         try:
             source = Image.open(LOCAL_AVATAR_PATH).convert("RGB")
         except Exception as exc:
-            print(f"本地头像读取失败，使用默认头像：{exc}")
+            print(f"Failed to read local avatar, using the default one: {exc}")
             source = draw_default_avatar()
     else:
-        print(f"未找到本地头像文件 {LOCAL_AVATAR_PATH}，使用默认头像")
+        print(f"Local avatar {LOCAL_AVATAR_PATH} not found, using the default one")
         source = draw_default_avatar()
 
     avatar = ImageOps.fit(source, (72, 72), method=Image.Resampling.LANCZOS)
@@ -558,7 +564,7 @@ def create_post_card(post):
 
 
 # ============================================================
-# Discord 推送
+# Discord posting
 # ============================================================
 
 def build_embeds(post, translated_text, card_filename):
@@ -611,7 +617,7 @@ def post_to_discord(post):
 
 
 # ============================================================
-# 主程序
+# Entry point
 # ============================================================
 
 def main():
@@ -634,7 +640,7 @@ def main():
         }
 
         post_to_discord(test_post)
-        print("测试成功：已发送模拟帖子。未读取 CNN，未修改 seen_trump.json。")
+        print("Test succeeded: sample post sent. CNN was not read and seen_trump.json was not modified.")
         return
 
     raw_posts = fetch_posts()
@@ -649,7 +655,7 @@ def main():
             state["hashes"][post["content_hash"]] = now
 
         save_state(state)
-        print(f"首次初始化完成：记录 {len(new_posts)} 条近期帖子，没有补发历史内容。")
+        print(f"First-run baseline done: recorded {len(new_posts)} recent post(s), no history was sent.")
         return
 
     posts_to_send = list(islice(new_posts, MAX_SEND_PER_RUN))
@@ -668,7 +674,7 @@ def main():
         time.sleep(DISCORD_DELAY_SECONDS)
 
     save_state(state)
-    print(f"检测到 {len(new_posts)} 条候选新帖子，已发送 {sent_count} 条。")
+    print(f"Found {len(new_posts)} new post(s), sent {sent_count}.")
 
 
 if __name__ == "__main__":

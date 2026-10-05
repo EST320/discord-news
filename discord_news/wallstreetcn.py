@@ -15,6 +15,7 @@ from pathlib import Path
 
 import requests
 
+from discord_news.discord import post_webhook
 from discord_news.paths import STATE_DIR
 
 # Wallstreetcn's web frontend moved to the awtmt.com API domain. The old
@@ -32,7 +33,6 @@ RETENTION_SECONDS = 12 * 3600
 MAX_NEWS_AGE_SECONDS = 15 * 60
 API_MAX_RETRIES = 3
 API_RETRY_BACKOFF_SECONDS = 3
-DISCORD_MAX_RETRIES = 5
 
 # Shown as the title when an item has neither a title nor any content to derive
 # one from. Kept in Chinese because the feed itself is Chinese.
@@ -244,26 +244,12 @@ def build_embed(channel, news):
     return embed
 
 
-def post_to_discord(channel, webhook_url, news, attempt=1):
-    response = SESSION.post(
+def post_to_discord(channel, webhook_url, news):
+    post_webhook(
         webhook_url,
-        json={"embeds": [build_embed(channel, news)], "allowed_mentions": {"parse": []}},
-        timeout=30,
+        {"embeds": [build_embed(channel, news)], "allowed_mentions": {"parse": []}},
+        session=SESSION,
     )
-
-    if response.status_code == 429:
-        # Bounded retries: unbounded recursion would blow the stack if Discord
-        # keeps rate limiting.
-        if attempt >= DISCORD_MAX_RETRIES:
-            raise RuntimeError(f"Discord returned 429 {attempt} times in a row, giving up on this item")
-        try:
-            retry_after = float(response.json().get("retry_after", 2))
-        except (ValueError, TypeError):
-            retry_after = 2.0
-        time.sleep(retry_after + 1)
-        return post_to_discord(channel, webhook_url, news, attempt + 1)
-
-    response.raise_for_status()
 
 
 def run(channel):

@@ -1,23 +1,31 @@
 # discord-news
 
 [![Tests](https://github.com/EST320/discord-news/actions/workflows/tests.yml/badge.svg)](https://github.com/EST320/discord-news/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Financial news and market-indicator trackers that run on GitHub Actions and post to Discord. Each tracker pulls incrementally from a public data source, deduplicates, filters, formats, and delivers through a Discord webhook.
 
-In production since July 2026. Deduplication state is committed to a dedicated [`state`](https://github.com/EST320/discord-news/tree/state) branch after every run, so that branch's history doubles as the run log while `main` holds only code.
+In production since July 2026.
+
+| Flash news | Truth Social |
+|---|---|
+| ![Wallstreetcn flash news in Discord](docs/screenshots/wallstreetcn.png) | ![Translated Truth Social post with a card image of the original](docs/screenshots/truth-social.png) |
+
+| Fear & Greed | Earnings calendar |
+|---|---|
+| ![Fear & Greed gauges with historical values](docs/screenshots/fear-greed.png) | ![Weekly earnings calendar table](docs/screenshots/earnings-calendar.png) |
 
 ## Trackers
 
 | Tracker | Source | Posts | Cadence |
 |---|---|---|---|
 | [`wallstreetcn`](discord_news/wallstreetcn.py) | Wallstreetcn live feed: US, A-share and HK channels | Headline + body | Every 2 minutes per channel |
-| [`truth_social`](discord_news/truth_social.py) | CNN's public Truth Social archive | Chinese translation + card image of the original post | Every 2 minutes |
+| [`truth_social`](discord_news/truth_social.py) | CNN's public Truth Social archive | Chinese translation + card image of the original post | Every 5 minutes |
 | [`fear_greed`](discord_news/fear_greed.py) | CNN Fear & Greed Index, alternative.me Crypto Fear & Greed Index | Gauge chart, historical comparison, change since last run | Scheduled |
 | [`earnings_calendar`](discord_news/earnings_calendar.py) | Finnhub earnings calendar and company profile APIs | Table image of next week's earnings, Monday to Friday | Every Friday |
 | [`backfill`](discord_news/backfill.py) | Wallstreetcn (all three channels) | Flash news missed during an outage window | Manual |
-| [`x_tracker`](discord_news/x_tracker.py) | Selected X / Twitter accounts | Tweets | **Experimental, not in production** |
 
-The Wallstreetcn feed is Chinese, and Truth Social posts are translated into Chinese, so the Discord output is Chinese-language. Code, logs and documentation are in English.
+The Wallstreetcn feed is Chinese, and Truth Social posts are translated into Chinese, so most of the Discord output is Chinese-language. Code, logs and documentation are in English.
 
 ## How it works
 
@@ -29,7 +37,7 @@ flowchart LR
     dedup --> filter[Drop stale items]
     filter --> format[Translate / render image / build embed]
     format --> discord[Discord webhook]
-    discord --> commit[Commit state to the state branch]
+    discord --> commit[Save state to the state branch]
 ```
 
 1. **Incremental fetch.** Page through the source by cursor and stop at the first already-seen item or the first page that falls outside the age window. No full scans.
@@ -37,7 +45,7 @@ flowchart LR
 3. **Age filter.** Skip items that are too old or have no timestamp (15 minutes for flash news, 12 hours for Truth Social), so historical content is never pushed by accident.
 4. **Format.** Translate with DeepL, render images with Pillow / Matplotlib / Plotly, and build the Discord embed.
 5. **Deliver.** Post through a Discord webhook. An item is written to state **only after it has been delivered**, so a failure midway neither repeats what was sent nor loses what wasn't.
-6. **Persist.** The workflow commits the state file to the `state` branch for the next run to read.
+6. **Persist.** The workflow saves the state file to the `state` branch for the next run to read.
 
 ## Repository layout
 
@@ -49,7 +57,6 @@ discord-news/
 │   ├── feargreed.yml                         # Fear & Greed indices
 │   ├── news-earnings.yml                     # Weekly earnings calendar
 │   ├── backfill.yml                          # Manual backfill
-│   ├── news-x.yml                            # X tracker (experimental)
 │   └── tests.yml                             # Unit tests on code changes
 ├── discord_news/
 │   ├── wallstreetcn.py                       # One module, three channels
@@ -57,14 +64,16 @@ discord-news/
 │   ├── truth_social.py
 │   ├── fear_greed.py
 │   ├── earnings_calendar.py
-│   ├── x_tracker.py
+│   ├── discord.py                            # Shared webhook client with bounded 429 retries
 │   └── paths.py                              # Repo-relative state/ and assets/ paths
 ├── scripts/
+│   ├── save_state.sh                         # Publishes state files to the state branch
 │   └── inspect_wallstreetcn_tags.py          # Debug helper: dump raw API fields
-├── state/                                    # Not on main: checkout of the `state` branch (one JSON file per tracker)
+├── requirements/                             # Pinned dependencies, one file per tracker
+├── state/                                    # Not on main: checkout of the `state` branch
 ├── assets/                                   # Static images used in generated cards
-├── tests/
-└── requirements.txt
+├── docs/screenshots/
+└── tests/
 ```
 
 Every tracker is a module run with `python -m discord_news.<name>` from the repository root.
@@ -74,12 +83,12 @@ Every tracker is a module run with `python -m discord_news.<name>` from the repo
 | Problem | Handling |
 |---|---|
 | Source API fails temporarily | Wallstreetcn: up to 3 attempts with linear backoff; if it still fails the run is skipped without failing the workflow, and the next run catches up |
-| Discord rate limit (HTTP 429) | Wait for the returned `retry_after`, then retry. Wallstreetcn caps this at 5 attempts per message |
+| Discord rate limit (HTTP 429) | Every tracker posts through one shared client that waits for the returned `retry_after` and gives up after 5 attempts per message |
 | Exception midway through a run | Wallstreetcn writes state in a `finally` block; Truth Social saves state after every delivered post |
 | Corrupt state file | Treated as empty state; the run takes the first-run path instead of crashing |
 | First run | Wallstreetcn sends only the latest 10 items and marks the rest as seen; Truth Social only records a baseline and sends nothing |
 | State file growth | Entries are pruned after a retention period (12 hours for flash news, 30 days for Truth Social) |
-| Concurrent runs writing state | Workflows that write state use a `concurrency` group so each tracker runs serially; state commits `git pull --rebase` first and retry with random jitter on push conflicts |
+| Concurrent runs writing state | Each tracker runs serially in its own `concurrency` group. Different trackers save with a compare-and-swap push and retry on conflict, so they never overwrite each other's files |
 | Gaps after an outage | `backfill` re-sends a time window, skipping recorded IDs, with a `DRY_RUN` mode |
 
 ## Design decisions
@@ -91,10 +100,10 @@ Flash news needs a steady poll roughly every 2 minutes. GitHub Actions' built-in
 ```text
 cron-job.org, every N minutes
   → POST /repos/{owner}/discord-news/actions/workflows/{workflow}.yml/dispatches   body: {"ref": "main"}
-  → workflow runs the tracker → posts to Discord → commits the state file to the state branch
+  → workflow runs the tracker → posts to Discord → saves the state file to the state branch
 ```
 
-A side benefit is that changing the cadence, pausing or resuming a tracker needs no code change. Only `news-trump.yml` also keeps a `schedule` trigger as a fallback; every other workflow runs on `workflow_dispatch` alone, which also allows manual runs from the Actions page for debugging.
+A side benefit is that changing the cadence, pausing or resuming a tracker needs no code change. Every workflow runs on `workflow_dispatch` alone, which also allows manual runs from the Actions page for debugging.
 
 Because the scheduler addresses workflows by file name, **the workflow file names are part of the external interface** and should not be renamed without updating the scheduler.
 
@@ -108,13 +117,14 @@ Setup:
    ```
 3. Use `{"ref": "main"}` as the request body.
 
-### State lives on a separate `state` branch
+### State lives on a single-commit `state` branch
 
-Each workflow checks out `main` for the code and the `state` branch into `state/`, runs the tracker, then commits and pushes from inside `state/`.
+Each workflow checks out `main` for the code and the [`state`](https://github.com/EST320/discord-news/tree/state) branch into `state/`, runs the tracker, then calls [`scripts/save_state.sh`](scripts/save_state.sh).
 
-- **Upside.** Zero cost and no database or extra service to run. Every state change is versioned, so problems can be traced back through that branch's history.
+- **Why git at all.** Zero cost and no database or extra service to run.
 - **Why a separate branch.** State used to be committed to `main`, where roughly 700 automated commits a day buried the code history. Keeping it on its own branch leaves `main` readable.
-- **Cost.** The repository still grows with every run, and concurrent workflows pushing to the same branch need conflict handling (see the table above).
+- **Why a single commit.** The save script takes the tree currently on the remote, replaces only the files its tracker owns, wraps the result in a parentless commit and swaps it in with `git push --force-with-lease`. The branch therefore never grows, and a tracker that loses the race simply retries on top of the new tree.
+- **Cost.** There is no state history to look back through; the Actions run logs are the record of what each run did.
 - **Next step.** If this grows further, state moves to SQLite or a key-value store.
 
 ## State file format
@@ -140,7 +150,7 @@ Only `truth_social` uses `hashes`. `seen_feargreed.json` instead stores the last
 
 ### Truth Social
 
-- Reads the public Truth Social archive JSON maintained by CNN.
+- Reads the public Truth Social archive JSON maintained by CNN. The archive holds every post ever made, so posts outside the age window are dropped on their timestamp alone before any parsing or hashing.
 - Deduplicates on both post ID and content hash.
 - The English original is rendered as a card image; the DeepL Chinese translation goes in the embed description, and the title links back to the original post.
 
@@ -161,10 +171,6 @@ Only `truth_social` uses `hashes`. `seen_feargreed.json` instead stores the last
 - Inputs: `HOURS` (how far back to look), `CHANNELS` (any of `us,a,hk`), `DRY_RUN` (list pending items without sending).
 - Runs locally or from `backfill.yml` on the Actions page.
 
-### X tracker (experimental)
-
-Not in production: there is currently no reliable way to fetch the data.
-
 ## Running locally
 
 ```bash
@@ -176,9 +182,11 @@ python -m discord_news.wallstreetcn us
 # Backfill dry run: list US and HK items missed in the last 6 hours, send nothing
 HOURS=6 CHANNELS=us,hk DRY_RUN=true python -m discord_news.backfill
 
-# Unit tests (standard library only)
+# Unit tests
 python -m unittest discover -s tests -v
 ```
+
+`requirements.txt` installs everything. Each workflow installs only the file under `requirements/` that its tracker needs, which keeps the 2-minute news runs fast.
 
 A fresh clone starts with an empty `state/` directory, so trackers take their first-run path. To run against the live state instead, check the branch out there first:
 
@@ -203,10 +211,10 @@ git worktree add state state
 
 ## Known limitations and roadmap
 
-- Tests cover only the Wallstreetcn tracker (parsing, dedup, age window, state pruning, failure handling). The other trackers are next.
-- `truth_social`, `fear_greed` and `earnings_calendar` retry Discord 429 responses without an upper bound, and each carries its own copy of the webhook-posting code. A shared Discord client with bounded retries would fix both.
+- Tests cover parsing, dedup, age windows, state pruning, failure handling and the Discord client. Image rendering and the live HTTP calls are not tested.
+- Only the Wallstreetcn tracker retries a failed source request; the others fail the run and rely on the next trigger.
 - Move state out of git entirely (see [Design decisions](#design-decisions)).
 
-## Disclaimer
+## License
 
-A personal project for learning and automation practice. All content remains the property of its original source.
+[MIT](LICENSE). A personal project for learning and automation practice; all news content remains the property of its original source.

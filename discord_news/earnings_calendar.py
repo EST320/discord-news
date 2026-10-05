@@ -5,8 +5,10 @@ from datetime import datetime, timedelta, timezone
 import requests
 import plotly.graph_objects as go
 
-FINNHUB_KEY = os.environ["FINNHUB_API_KEY"]
-WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL_EARNINGS"]
+from discord_news.discord import post_webhook
+
+FINNHUB_KEY_ENV = "FINNHUB_API_KEY"
+WEBHOOK_ENV = "DISCORD_WEBHOOK_URL_EARNINGS"
 FINNHUB_URL = "https://finnhub.io/api/v1/calendar/earnings"
 PROFILE_URL = "https://finnhub.io/api/v1/stock/profile2"
 OUTPUT_FILE = "earnings_calendar.png"
@@ -37,7 +39,7 @@ def get_next_week_range():
 def fetch_earnings(start, end):
     response = requests.get(
         FINNHUB_URL,
-        params={"from": start.isoformat(), "to": end.isoformat(), "token": FINNHUB_KEY},
+        params={"from": start.isoformat(), "to": end.isoformat(), "token": os.environ[FINNHUB_KEY_ENV]},
         timeout=30,
     )
     response.raise_for_status()
@@ -54,7 +56,7 @@ def fetch_profile(symbol, cache):
     if symbol in cache:
         return cache[symbol]
 
-    response = requests.get(PROFILE_URL, params={"symbol": symbol, "token": FINNHUB_KEY}, timeout=30)
+    response = requests.get(PROFILE_URL, params={"symbol": symbol, "token": os.environ[FINNHUB_KEY_ENV]}, timeout=30)
     time.sleep(PROFILE_REQUEST_DELAY)
 
     profile = {"name": symbol, "market_cap": 0}
@@ -163,20 +165,14 @@ def build_chart(grouped, monday):
 
 def post_to_discord():
     with open(OUTPUT_FILE, "rb") as f:
-        response = requests.post(
-            WEBHOOK_URL,
-            files={"file": (OUTPUT_FILE, f, "image/png")},
-            timeout=30,
-        )
-
-    if response.status_code == 429:
-        time.sleep(float(response.json().get("retry_after", 2)) + 1)
-        return post_to_discord()
-
-    response.raise_for_status()
+        post_webhook(os.environ[WEBHOOK_ENV], file=(OUTPUT_FILE, f.read()))
 
 
 def main():
+    # Fail fast on missing configuration instead of after the Finnhub calls.
+    for name in (FINNHUB_KEY_ENV, WEBHOOK_ENV):
+        os.environ[name]
+
     monday, friday = get_next_week_range()
     entries = fetch_earnings(monday, friday)
 

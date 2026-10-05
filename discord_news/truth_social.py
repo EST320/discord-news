@@ -14,6 +14,7 @@ import deepl
 import requests
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+from discord_news.discord import post_webhook
 from discord_news.paths import ASSETS_DIR, STATE_DIR
 
 
@@ -24,8 +25,8 @@ from discord_news.paths import ASSETS_DIR, STATE_DIR
 TEST_MODE = False
 DATA_URL = "https://ix.cnn.io/data/truth-social/truth_archive.json"
 
-WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL_TRUMP"]
-DEEPL_API_KEY = os.environ["DEEPL_API_KEY"]
+WEBHOOK_ENV = "DISCORD_WEBHOOK_URL_TRUMP"
+DEEPL_KEY_ENV = "DEEPL_API_KEY"
 
 STATE_FILE = STATE_DIR / "seen_trump.json"
 CARD_DIR = Path("trump_cards")
@@ -56,7 +57,17 @@ MEDIA_HEADERS = {
     "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
 }
 
-translator = deepl.Translator(DEEPL_API_KEY)
+# Keys an archive entry may carry its creation time under.
+TIMESTAMP_KEYS = ("created_at", "createdAt", "published_at", "timestamp")
+
+_translator = None
+
+
+def get_translator():
+    global _translator
+    if _translator is None:
+        _translator = deepl.Translator(os.environ[DEEPL_KEY_ENV])
+    return _translator
 
 
 # ============================================================
@@ -145,6 +156,10 @@ def parse_timestamp(value):
         return None, None
 
 
+def parse_created(item):
+    return parse_timestamp(next((item[k] for k in TIMESTAMP_KEYS if item.get(k)), None))
+
+
 def clean_html_content(value):
     text = html.unescape(str(value or ""))
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
@@ -214,12 +229,7 @@ def item_to_post(item):
     if not content and not media:
         return None
 
-    created_ts, timestamp = parse_timestamp(
-        item.get("created_at")
-        or item.get("createdAt")
-        or item.get("published_at")
-        or item.get("timestamp")
-    )
+    created_ts, timestamp = parse_created(item)
 
     post_url = str(
         item.get("url") or item.get("status_url") or item.get("permalink") or ""
@@ -246,6 +256,12 @@ def collect_new_posts(raw_posts, state):
     collected = {}
 
     for raw_item in raw_posts:
+        # The archive holds every post ever made. Drop the old ones on the
+        # timestamp alone, before any HTML cleanup, hashing or dedup logging.
+        created_ts, _ = parse_created(raw_item)
+        if created_ts is not None and now - created_ts > MAX_POST_AGE_SECONDS:
+            continue
+
         post = item_to_post(raw_item)
         if post is None:
             continue
@@ -258,12 +274,8 @@ def collect_new_posts(raw_posts, state):
             print(f"Skipping post with unparseable timestamp: {post['id']}")
             continue
 
-        age_seconds = now - post["created_ts"]
-
-        if age_seconds < -600:
+        if now - post["created_ts"] < -600:
             print(f"Skipping post with a timestamp in the future: {post['id']}")
-            continue
-        if age_seconds > MAX_POST_AGE_SECONDS:
             continue
 
         collected[post["id"]] = post
@@ -280,7 +292,7 @@ def translate_text(text):
         return None
 
     try:
-        result = translator.translate_text(text, source_lang="EN", target_lang="ZH")
+        result = get_translator().translate_text(text, source_lang="EN", target_lang="ZH")
         return result.text.strip() or None
     except deepl.DeepLException as exc:
         print(f"DeepL translation failed, falling back to the English original: {exc}")
@@ -597,21 +609,12 @@ def post_to_discord(post):
     }
 
     try:
-        with card_path.open("rb") as card_file:
-            response = requests.post(
-                WEBHOOK_URL,
-                data={"payload_json": json.dumps(payload, ensure_ascii=False)},
-                files={"file": (card_path.name, card_file, "image/png")},
-                timeout=60,
-            )
-
-        if response.status_code == 429:
-            retry_after = float(response.json().get("retry_after", 2))
-            time.sleep(retry_after + 1)
-            return post_to_discord(post)
-
-        response.raise_for_status()
-
+        post_webhook(
+            os.environ[WEBHOOK_ENV],
+            payload,
+            file=(card_path.name, card_path.read_bytes()),
+            timeout=60,
+        )
     finally:
         card_path.unlink(missing_ok=True)
 
@@ -621,6 +624,10 @@ def post_to_discord(post):
 # ============================================================
 
 def main():
+    # Fail fast on missing configuration instead of midway through a run.
+    for name in (WEBHOOK_ENV, DEEPL_KEY_ENV):
+        os.environ[name]
+
     state = load_state()
 
     if TEST_MODE:

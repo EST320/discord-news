@@ -1,8 +1,5 @@
-requests
-deepl
-Pillow
-curl_cffi
-plotly
-kaleido
-matplotlib
-numpy
+# Everything, for local development and the test suite. Each workflow installs
+# only the file under requirements/ that its tracker needs.
+-r requirements/truth_social.txt
+-r requirements/fear_greed.txt
+-r requirements/earnings.txt

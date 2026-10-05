@@ -1,6 +1,5 @@
 import json
 import os
-import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -12,6 +11,7 @@ from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
 import requests
 
+from discord_news.discord import post_webhook
 from discord_news.paths import STATE_DIR
 
 # ============================================================
@@ -23,7 +23,7 @@ TEST_MODE = False
 CNN_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
 CRYPTO_URL = "https://api.alternative.me/fng/?limit=35"
 
-WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL_FEARGREED"]
+WEBHOOK_ENV = "DISCORD_WEBHOOK_URL_FEARGREED"
 
 STATE_FILE = STATE_DIR / "seen_feargreed.json"
 CHART_DIR = Path("feargreed_charts")
@@ -336,20 +336,12 @@ def post_to_discord(title, commentary, value, updated_at, chart_path, color):
 
     payload = {"embeds": [embed], "allowed_mentions": {"parse": []}}
 
-    with chart_path.open("rb") as chart_file:
-        response = requests.post(
-            WEBHOOK_URL,
-            data={"payload_json": json.dumps(payload, ensure_ascii=False)},
-            files={"file": (chart_path.name, chart_file, "image/png")},
-            timeout=60,
-        )
-
-    if response.status_code == 429:
-        retry_after = float(response.json().get("retry_after", 2))
-        time.sleep(retry_after + 1)
-        return post_to_discord(title, commentary, value, updated_at, chart_path, color)
-
-    response.raise_for_status()
+    post_webhook(
+        os.environ[WEBHOOK_ENV],
+        payload,
+        file=(chart_path.name, chart_path.read_bytes()),
+        timeout=60,
+    )
     chart_path.unlink(missing_ok=True)
 
 
@@ -414,6 +406,7 @@ def run_crypto(state):
 # ============================================================
 
 def main():
+    os.environ[WEBHOOK_ENV]  # fail fast on missing configuration
     state = load_state()
 
     if TEST_MODE:

@@ -18,9 +18,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      # kaleido is required by plotly's fig.write_image() to export the PNG.
       - name: Install dependencies
-        run: pip install requests plotly kaleido
+        run: pip install -r requirements/earnings.txt
 
       - name: Fetch and post earnings calendar
         env:

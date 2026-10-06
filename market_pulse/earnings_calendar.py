@@ -21,7 +21,7 @@ MAX_COMPANIES_PER_DAY = 15
 PROFILE_REQUEST_DELAY = 1.1
 
 
-def get_next_week_range():
+def get_next_week_range(today=None):
     """
     Return next week's Monday and Friday.
 
@@ -29,7 +29,7 @@ def get_next_week_range():
     the "current week". Adding 7 days to this week's Monday pins the range to
     next week regardless of the weekday or time the script actually runs.
     """
-    today = datetime.now(timezone.utc).date()
+    today = today or datetime.now(timezone.utc).date()
     this_monday = today - timedelta(days=today.weekday())
     next_monday = this_monday + timedelta(days=7)
     next_friday = next_monday + timedelta(days=4)

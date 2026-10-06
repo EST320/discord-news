@@ -1,4 +1,5 @@
-"""Weekly IPO calendar: a table image of next week's expected US listings.
+"""Weekly IPO calendar: a table image of the expected US listings from today
+through the end of next week.
 
 Usage:
     python -m market_pulse.ipo_calendar
@@ -7,7 +8,7 @@ Set DRY_RUN=true to fetch and render without posting.
 """
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 
 import requests
 import plotly.graph_objects as go
@@ -69,8 +70,19 @@ def format_price(value):
     return "$" + " - ".join(parts) if parts else "-"
 
 
-def select_listings(entries, monday, friday):
-    """Keep next week's expected or priced deals, by date then largest first."""
+def listing_window(today=None):
+    """Today through next week's Friday.
+
+    IPO dates are usually fixed only a week or so ahead, so a window limited
+    to next week is often still empty; the rest of this week is included too.
+    """
+    today = today or datetime.now(timezone.utc).date()
+    _, next_friday = get_next_week_range(today)
+    return today, next_friday
+
+
+def select_listings(entries, start, end):
+    """Keep the window's expected or priced deals, by date then largest first."""
     listings = []
     for entry in entries:
         if str(entry.get("status") or "").lower() not in SHOWN_STATUSES:
@@ -79,7 +91,7 @@ def select_listings(entries, monday, friday):
             date = datetime.strptime(entry.get("date") or "", "%Y-%m-%d").date()
         except ValueError:
             continue
-        if not monday <= date <= friday:
+        if not start <= date <= end:
             continue
 
         name = str(entry.get("name") or "").strip()
@@ -157,24 +169,30 @@ def main():
     if not DRY_RUN:
         os.environ[WEBHOOK_ENV]
 
-    monday, friday = get_next_week_range()
-    # Deals can price over the weekend before a Monday listing.
-    entries = fetch_ipos(monday - timedelta(days=2), friday)
-    listings = select_listings(entries, monday, friday)
+    start, end = listing_window()
+    entries = fetch_ipos(start, end)
+    listings = select_listings(entries, start, end)
+    title = f"IPO Calendar · {start.strftime('%b %d')} - {end.strftime('%b %d')}"
 
     if not listings:
-        print(f"No expected IPOs for {monday} to {friday} ({len(entries)} calendar entries).")
+        print(f"No expected IPOs for {start} to {end} ({len(entries)} calendar entries).")
+        if not DRY_RUN:
+            # Say so in the channel: silence would look the same as a failed run.
+            post_webhook(os.environ[WEBHOOK_ENV], {
+                "embeds": [{"title": title, "description": "No IPOs are scheduled in this period yet.", "color": 5793266}],
+                "allowed_mentions": {"parse": []},
+            })
         return
 
     build_chart(listings)
-    summary = f"{len(listings)} expected IPO(s) for {monday} to {friday}"
+    summary = f"{len(listings)} expected IPO(s) for {start} to {end}"
 
     if DRY_RUN:
         print(f"[dry run] {summary} -> {OUTPUT_FILE}")
         return
 
     embed = {
-        "title": f"IPO Calendar · {monday.strftime('%b %d')} - {friday.strftime('%b %d')}",
+        "title": title,
         "color": 5793266,
         "image": {"url": f"attachment://{OUTPUT_FILE}"},
     }

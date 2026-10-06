@@ -28,7 +28,7 @@ In production since July 2026.
 | [`fear_greed`](market_pulse/fear_greed.py) | CNN Fear & Greed Index, alternative.me Crypto Fear & Greed Index | Gauge chart, historical comparison, change since last run | Scheduled |
 | [`earnings_calendar`](market_pulse/earnings_calendar.py) | Finnhub earnings calendar and company profile APIs | Table image of next week's earnings, Monday to Friday | Every Friday |
 | [`market_close`](market_pulse/market_close.py) | Yahoo Finance | Chinese-language image: S&P 500, Nasdaq, Dow, Russell 2000 (IWM), semiconductors (SOXX), a heat map of the 11 sectors, VIX, 10-year yield, dollar index, gold, oil, bitcoin | Weekdays, 4:15 pm New York time |
-| [`ipo_calendar`](market_pulse/ipo_calendar.py) | Finnhub IPO calendar API | Table image of next week's expected US listings | Every Friday |
+| [`ipo_calendar`](market_pulse/ipo_calendar.py) | Finnhub IPO calendar API | Table image of expected US listings from today through the end of next week | Every Friday |
 | [`backfill`](market_pulse/backfill.py) | Wallstreetcn (all three channels) | Flash news missed during an outage window | Manual |
 
 The Wallstreetcn feed is Chinese, and Truth Social posts are translated into Chinese, so most of the Discord output is Chinese-language. Code, logs and documentation are in English.
@@ -194,7 +194,8 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 
 ### IPO calendar
 
-- Runs alongside the earnings calendar and covers Monday to Friday of the following week.
+- Runs alongside the earnings calendar and covers today through next week's Friday. IPO dates are usually fixed only a week or so ahead, so a next-week-only window would often be empty.
+- When nothing is scheduled it posts a one-line note saying so, so that an empty week cannot be mistaken for a failed run.
 - Shows deals Finnhub marks as expected or priced; filed-only and withdrawn deals are left out.
 - Sorted by date, then by deal size, capped at 25 rows.
 

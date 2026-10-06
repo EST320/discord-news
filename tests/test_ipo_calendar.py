@@ -1,5 +1,6 @@
 import unittest
 from datetime import date
+from unittest import mock
 
 from market_pulse import ipo_calendar as ic
 
@@ -35,6 +36,42 @@ class FormattingTest(unittest.TestCase):
     def test_price_cell_never_holds_two_dollar_signs(self):
         # Plotly would render the text between them as LaTeX.
         self.assertEqual(ic.format_price("4.00-6.00").count("$"), 1)
+
+
+class ListingWindowTest(unittest.TestCase):
+    def test_runs_from_today_through_next_friday(self):
+        # Tuesday, the usual Saturday run, and a Friday.
+        self.assertEqual(ic.listing_window(date(2026, 10, 6)), (date(2026, 10, 6), date(2026, 10, 16)))
+        self.assertEqual(ic.listing_window(date(2026, 10, 10)), (date(2026, 10, 10), date(2026, 10, 16)))
+        self.assertEqual(ic.listing_window(date(2026, 10, 9)), (date(2026, 10, 9), date(2026, 10, 16)))
+
+    def test_this_weeks_remaining_deals_are_included(self):
+        start, end = ic.listing_window(date(2026, 10, 6))
+        entries = [entry(5, "PAST"), entry(7, "THISWEEK"), entry(13, "NEXTWEEK"), entry(19, "LATER")]
+        self.assertEqual([i["symbol"] for i in ic.select_listings(entries, start, end)], ["THISWEEK", "NEXTWEEK"])
+
+
+class EmptyCalendarTest(unittest.TestCase):
+    def run_main(self, dry_run):
+        patches = (
+            mock.patch.object(ic, "fetch_ipos", return_value=[]),
+            mock.patch.object(ic, "post_webhook"),
+            mock.patch.object(ic, "DRY_RUN", dry_run),
+            mock.patch.dict("os.environ", {ic.FINNHUB_KEY_ENV: "k", ic.WEBHOOK_ENV: "hook"}),
+            mock.patch("builtins.print"),
+        )
+        with patches[0], patches[1] as post, patches[2], patches[3], patches[4]:
+            ic.main()
+        return post
+
+    def test_an_empty_week_is_announced_instead_of_staying_silent(self):
+        post = self.run_main(dry_run=False)
+        payload = post.call_args.args[1]
+        self.assertIn("No IPOs are scheduled", payload["embeds"][0]["description"])
+        self.assertTrue(payload["embeds"][0]["title"].startswith("IPO Calendar"))
+
+    def test_dry_run_posts_nothing(self):
+        self.run_main(dry_run=True).assert_not_called()
 
 
 class SelectListingsTest(unittest.TestCase):

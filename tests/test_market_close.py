@@ -140,7 +140,7 @@ class RecapTest(unittest.TestCase):
     def test_embed_only_captions_the_image_with_the_date(self):
         embed = mc.build_embed(sample_quotes(), date(2026, 10, 6), "market_close.png")
         self.assertEqual(embed, {
-            "title": "美股收盘 · 2026年10月6日 周二",
+            "description": "美股收盘 · 2026年10月6日 周二",
             "color": int(mc.UP.lstrip("#"), 16),
             "image": {"url": "attachment://market_close.png"},
         })

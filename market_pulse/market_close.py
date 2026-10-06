@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.colors import to_rgb
 from matplotlib.font_manager import FontProperties
+from matplotlib.transforms import Bbox
 import requests
 
 from market_pulse.discord import post_webhook
@@ -266,10 +267,11 @@ def breadth(rows):
 # ============================================================
 
 def build_embed(quotes, session_date, image_name):
-    """The image carries all the numbers; the embed only captions it with the date."""
+    """The image carries all the numbers; the embed only captions it with the date, in small text."""
     sp500 = quotes.get("^GSPC")
     return {
-        "title": f"美股收盘 · {format_date(session_date)}",
+        # Description rather than title: regular-size text instead of a bold heading.
+        "description": f"美股收盘 · {format_date(session_date)}",
         "color": int(change_color(sp500["change_pct"] if sp500 else 0).lstrip("#"), 16),
         "image": {"url": f"attachment://{image_name}"},
     }
@@ -418,8 +420,7 @@ def draw_card(quotes, intraday, ranges, session_date, out_path=OUTPUT_FILE):
     left, right, gap = 0.03, 0.97, 0.012
 
     # Header
-    fig.text(left, 0.957, "美股收盘", fontproperties=font(26, bold=True), color=TEXT, ha="left", va="center")
-    fig.text(right, 0.957, format_date(session_date), fontproperties=font(14), color=MUTED, ha="right", va="center")
+    fig.text(left, 0.938, format_date(session_date), fontproperties=font(13), color=MUTED, ha="left", va="center")
 
     # Indices: one tile each, with the session's intraday path
     xs, width = grid(left, right, len(INDICES), gap)
@@ -447,7 +448,9 @@ def draw_card(quotes, intraday, ranges, session_date, out_path=OUTPUT_FILE):
     fig.text(right, 0.028, "涨跌幅相对上一交易日收盘 · 板块为 SPDR 行业 ETF · 数据来源 Yahoo Finance",
              fontproperties=font(10), color=MUTED, ha="right", va="center")
 
-    plt.savefig(out_path, dpi=110, facecolor=BG)
+    # The header is a single small date line, so trim the unused strip above it.
+    width, height = fig.get_size_inches()
+    plt.savefig(out_path, dpi=110, facecolor=BG, bbox_inches=Bbox([[0, 0], [width, height * 0.968]]))
     plt.close(fig)
     return out_path
 

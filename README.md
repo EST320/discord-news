@@ -1,7 +1,7 @@
 # market-pulse-discord
 
 [![Tests](https://github.com/EST320/market-pulse-discord/actions/workflows/tests.yml/badge.svg)](https://github.com/EST320/market-pulse-discord/actions/workflows/tests.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
 
 Financial news and market-indicator trackers that run on GitHub Actions and post to Discord. Each tracker pulls incrementally from a public data source, deduplicates, filters, formats, and delivers through a Discord webhook.
 
@@ -219,4 +219,6 @@ git worktree add state state
 
 ## License
 
-[MIT](LICENSE). A personal project for learning and automation practice; all news content remains the property of its original source.
+[PolyForm Noncommercial 1.0.0](LICENSE). You may use, modify and share this code for any noncommercial purpose, such as personal use, study and research. **Commercial use is not permitted**, including selling it or offering it as a paid service. For a commercial license, contact the author.
+
+A personal project for learning and automation practice; all news content remains the property of its original source.

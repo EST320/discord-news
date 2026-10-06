@@ -1,12 +1,9 @@
 name: US Market Close Summary
 
+# Triggered by the external scheduler at 4:15 pm New York time on weekdays
+# (see README, "Triggering"). GitHub's own schedule is not used: it is
+# best-effort and can run late or not at all.
 on:
-  schedule:
-    # 4:15 pm in New York, Monday to Friday. GitHub cron is UTC only, so there
-    # is one entry per New York UTC offset and the gate job below lets through
-    # only the one that matches the offset in force today.
-    - cron: "15 20 * * 1-5"   # 4:15 pm EDT (daylight time, UTC-4)
-    - cron: "15 21 * * 1-5"   # 4:15 pm EST (standard time, UTC-5)
   workflow_dispatch:
   # A change to the tracker triggers a dry run: fetch and render, post nothing.
   push:
@@ -21,37 +18,7 @@ permissions:
   contents: read
 
 jobs:
-  gate:
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    outputs:
-      run: ${{ steps.check.outputs.run }}
-    steps:
-      # Decided from which cron entry fired, not from the clock, so a delayed
-      # start by GitHub cannot make the right run skip itself.
-      - name: Check this is the run for today's New York close
-        id: check
-        env:
-          EVENT: ${{ github.event_name }}
-          CRON: ${{ github.event.schedule }}
-        run: |
-          offset=$(TZ=America/New_York date +%z)
-          # Without time zone data the offset would silently read +0000 and
-          # no scheduled run would ever post, so fail loudly instead.
-          if [ "$offset" != "-0400" ] && [ "$offset" != "-0500" ]; then
-            echo "Unexpected New York UTC offset: $offset" >&2
-            exit 1
-          fi
-          run=false
-          if [ "$EVENT" != "schedule" ]; then run=true; fi
-          if [ "$offset" = "-0400" ] && [ "$CRON" = "15 20 * * 1-5" ]; then run=true; fi
-          if [ "$offset" = "-0500" ] && [ "$CRON" = "15 21 * * 1-5" ]; then run=true; fi
-          echo "New York offset $offset, event $EVENT, cron '$CRON' -> run=$run"
-          echo "run=$run" >> "$GITHUB_OUTPUT"
-
   post-market-close:
-    needs: gate
-    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

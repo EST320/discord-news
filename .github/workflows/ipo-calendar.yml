@@ -1,9 +1,7 @@
 name: Weekly IPO Calendar to Discord
 
+# Triggered by the external scheduler once a week (see README, "Triggering").
 on:
-  schedule:
-    # Saturday 02:10 UTC (Friday evening in New York), covering the week ahead.
-    - cron: "10 2 * * 6"
   workflow_dispatch:
   # A change to the tracker triggers a dry run: fetch and render, post nothing.
   push:

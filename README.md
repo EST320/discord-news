@@ -134,11 +134,12 @@ Each file on the `state` branch records when an ID (and, for Truth Social, a con
 ```json
 {
   "seen":   { "1234567890": 1784326800.12 },
-  "hashes": { "a1b2c3...": 1784326800.12 }
+  "hashes": { "a1b2c3...": 1784326800.12 },
+  "etag":   "\"9a0a9073...-3\""
 }
 ```
 
-Only `truth_social` uses `hashes`. `seen_feargreed.json` instead stores the last posted value of each index. A `seen` file can safely be reset to `{"seen": {}}`: the tracker takes its first-run path and does not flood the channel with history.
+Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stores the last posted value of each index. A `seen` file can safely be reset to `{"seen": {}}`: the tracker takes its first-run path and does not flood the channel with history.
 
 ## Tracker notes
 
@@ -150,7 +151,8 @@ Only `truth_social` uses `hashes`. `seen_feargreed.json` instead stores the last
 
 ### Truth Social
 
-- Reads the public Truth Social archive JSON maintained by CNN. The archive holds every post ever made, so posts outside the age window are dropped on their timestamp alone before any parsing or hashing.
+- Reads the public Truth Social archive JSON maintained by CNN. The archive is a ~20 MB file holding every post ever made, so the tracker sends the `ETag` of the last version it fully processed and stops on `304 Not Modified` without downloading anything. The ETag is only stored once every new post in that version has been delivered.
+- When the archive did change, posts outside the age window are dropped on their timestamp alone before any parsing or hashing.
 - Deduplicates on both post ID and content hash.
 - The English original is rendered as a card image; the DeepL Chinese translation goes in the embed description, and the title links back to the original post.
 

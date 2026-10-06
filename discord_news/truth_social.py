@@ -71,28 +71,31 @@ def get_translator():
 
 
 # ============================================================
-# State: dedup by post ID + content hash
+# State: dedup by post ID + content hash, plus the archive ETag
 # ============================================================
 
 def load_state():
     if not STATE_FILE.exists():
-        return {"seen": {}, "hashes": {}}
+        return {"seen": {}, "hashes": {}, "etag": None}
 
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
         seen = data.get("seen", {})
         hashes = data.get("hashes", {})
+        etag = data.get("etag")
 
         if not isinstance(seen, dict):
             seen = {}
         if not isinstance(hashes, dict):
             hashes = {}
+        if not isinstance(etag, str):
+            etag = None
 
-        return {"seen": seen, "hashes": hashes}
+        return {"seen": seen, "hashes": hashes, "etag": etag}
 
     except (OSError, json.JSONDecodeError) as exc:
         print(f"Failed to read state file, starting with empty state: {exc}")
-        return {"seen": {}, "hashes": {}}
+        return {"seen": {}, "hashes": {}, "etag": None}
 
 
 def save_state(state):
@@ -109,7 +112,7 @@ def save_state(state):
 
     STATE_FILE.write_text(
         json.dumps(
-            {"seen": pruned_seen, "hashes": pruned_hashes},
+            {"seen": pruned_seen, "hashes": pruned_hashes, "etag": state.get("etag")},
             ensure_ascii=False,
             indent=2,
         ),
@@ -121,16 +124,30 @@ def save_state(state):
 # Fetching and post parsing
 # ============================================================
 
-def fetch_posts():
-    response = requests.get(DATA_URL, headers=HEADERS, timeout=30)
+def fetch_posts(etag=None):
+    """Download the archive. Returns (posts, etag).
+
+    The archive is a ~20 MB JSON file that changes only when there is a new
+    post, so the ETag of the last fully processed version is sent back as
+    If-None-Match. On 304 Not Modified nothing is downloaded and posts is None.
+    """
+    headers = dict(HEADERS)
+    if etag:
+        headers["If-None-Match"] = etag
+
+    response = requests.get(DATA_URL, headers=headers, timeout=30)
+    if response.status_code == 304:
+        return None, etag
+
     response.raise_for_status()
     payload = response.json()
+    new_etag = response.headers.get("ETag")
 
     if isinstance(payload, list):
-        return payload
+        return payload, new_etag
     if isinstance(payload, dict):
         posts = payload.get("posts", [])
-        return posts if isinstance(posts, list) else []
+        return (posts if isinstance(posts, list) else []), new_etag
 
     raise RuntimeError(f"Unexpected CNN data format: {type(payload)}")
 
@@ -650,7 +667,11 @@ def main():
         print("Test succeeded: sample post sent. CNN was not read and seen_trump.json was not modified.")
         return
 
-    raw_posts = fetch_posts()
+    raw_posts, etag = fetch_posts(state["etag"])
+    if raw_posts is None:
+        print("Archive unchanged since the last run, nothing to do.")
+        return
+
     new_posts = collect_new_posts(raw_posts, state)
 
     is_first_run = not state["seen"] and not state["hashes"]
@@ -661,12 +682,19 @@ def main():
             state["seen"][post["id"]] = now
             state["hashes"][post["content_hash"]] = now
 
+        state["etag"] = etag
         save_state(state)
         print(f"First-run baseline done: recorded {len(new_posts)} recent post(s), no history was sent.")
         return
 
     posts_to_send = list(islice(new_posts, MAX_SEND_PER_RUN))
     sent_count = 0
+
+    # The ETag is only remembered once every new post in this version of the
+    # archive has been delivered. Until then it stays cleared, so a failure
+    # midway or a backlog beyond MAX_SEND_PER_RUN makes the next run download
+    # the archive again instead of skipping it as unchanged.
+    state["etag"] = None
 
     for post in posts_to_send:
         post_to_discord(post)
@@ -680,6 +708,8 @@ def main():
 
         time.sleep(DISCORD_DELAY_SECONDS)
 
+    if sent_count == len(new_posts):
+        state["etag"] = etag
     save_state(state)
     print(f"Found {len(new_posts)} new post(s), sent {sent_count}.")
 

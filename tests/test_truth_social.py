@@ -16,7 +16,7 @@ def raw(post_id, content="hello", age_seconds=60, **extra):
 
 
 def empty_state():
-    return {"seen": {}, "hashes": {}}
+    return {"seen": {}, "hashes": {}, "etag": None}
 
 
 class ParsingTest(unittest.TestCase):
@@ -106,7 +106,7 @@ class StateTest(unittest.TestCase):
             self.assertEqual(ts.load_state(), empty_state())
 
     def test_wrong_shapes_are_reset(self):
-        self.state_file.write_text('{"seen": [], "hashes": "x"}', encoding="utf-8")
+        self.state_file.write_text('{"seen": [], "hashes": "x", "etag": 5}', encoding="utf-8")
         self.assertEqual(ts.load_state(), empty_state())
 
     def test_save_prunes_expired_entries(self):
@@ -115,6 +115,105 @@ class StateTest(unittest.TestCase):
         ts.save_state({"seen": {"old": expired, "new": now}, "hashes": {"h_old": expired, "h_new": now}})
         state = ts.load_state()
         self.assertEqual((list(state["seen"]), list(state["hashes"])), (["new"], ["h_new"]))
+
+    def test_etag_round_trips(self):
+        ts.save_state({"seen": {}, "hashes": {}, "etag": '"abc-3"'})
+        self.assertEqual(ts.load_state()["etag"], '"abc-3"')
+
+
+class FakeResponse:
+    def __init__(self, status_code, payload=None, etag=None):
+        self.status_code = status_code
+        self._payload = payload
+        self.headers = {"ETag": etag} if etag else {}
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"status {self.status_code}")
+
+
+class FetchPostsTest(unittest.TestCase):
+    def fetch(self, response, etag=None):
+        with mock.patch.object(ts.requests, "get", return_value=response) as get:
+            result = ts.fetch_posts(etag)
+        return result, get.call_args.kwargs["headers"]
+
+    def test_first_fetch_sends_no_condition_and_returns_new_etag(self):
+        result, headers = self.fetch(FakeResponse(200, [{"id": 1}], '"v1"'))
+        self.assertEqual(result, ([{"id": 1}], '"v1"'))
+        self.assertNotIn("If-None-Match", headers)
+
+    def test_known_etag_is_sent_and_304_returns_no_posts(self):
+        result, headers = self.fetch(FakeResponse(304), '"v1"')
+        self.assertEqual(result, (None, '"v1"'))
+        self.assertEqual(headers["If-None-Match"], '"v1"')
+
+    def test_posts_wrapped_in_object(self):
+        result, _ = self.fetch(FakeResponse(200, {"posts": [{"id": 1}]}, '"v2"'))
+        self.assertEqual(result, ([{"id": 1}], '"v2"'))
+
+
+class MainEtagTest(unittest.TestCase):
+    """The ETag must only be remembered once the archive version is fully handled."""
+
+    def setUp(self):
+        self.state_file = Path(tempfile.mkdtemp()) / "seen_trump.json"
+        self.posted = mock.Mock()
+        patches = [
+            mock.patch.object(ts, "STATE_FILE", self.state_file),
+            mock.patch.object(ts, "post_to_discord", self.posted),
+            mock.patch.object(ts.time, "sleep"),
+            mock.patch.dict("os.environ", {ts.WEBHOOK_ENV: "hook", ts.DEEPL_KEY_ENV: "key"}),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        # Start past the first-run baseline, with an older archive version on record.
+        ts.save_state({"seen": {"0": time.time()}, "hashes": {}, "etag": '"old"'})
+
+    def run_main(self, posts, etag='"new"'):
+        with mock.patch.object(ts, "fetch_posts", return_value=(posts, etag)) as fetch, \
+                redirect_stdout(io.StringIO()):
+            try:
+                ts.main()
+            finally:
+                self.fetched_with = fetch.call_args.args
+        return ts.load_state()
+
+    def test_unchanged_archive_sends_nothing_and_keeps_state(self):
+        before = self.state_file.read_text(encoding="utf-8")
+        state = self.run_main(None, '"old"')
+        self.assertEqual(self.fetched_with, ('"old"',))
+        self.posted.assert_not_called()
+        self.assertEqual(self.state_file.read_text(encoding="utf-8"), before)
+        self.assertEqual(state["etag"], '"old"')
+
+    def test_etag_saved_after_everything_was_sent(self):
+        state = self.run_main([raw(1, "a"), raw(2, "b")])
+        self.assertEqual(self.posted.call_count, 2)
+        self.assertEqual(state["etag"], '"new"')
+
+    def test_etag_saved_when_archive_changed_but_nothing_is_new(self):
+        state = self.run_main([raw(0, "already seen")])
+        self.assertEqual(state["etag"], '"new"')
+
+    def test_etag_cleared_when_sending_fails_midway(self):
+        self.posted.side_effect = [None, RuntimeError("discord down")]
+        with self.assertRaises(RuntimeError):
+            self.run_main([raw(1, "a", 20), raw(2, "b", 10)])
+        state = ts.load_state()
+        self.assertIn("1", state["seen"])
+        self.assertNotIn("2", state["seen"])
+        self.assertIsNone(state["etag"])
+
+    def test_etag_cleared_while_a_backlog_remains(self):
+        backlog = [raw(i, f"post {i}", 100 + i) for i in range(1, ts.MAX_SEND_PER_RUN + 3)]
+        state = self.run_main(backlog)
+        self.assertEqual(self.posted.call_count, ts.MAX_SEND_PER_RUN)
+        self.assertIsNone(state["etag"])
 
 
 class DescriptionTest(unittest.TestCase):

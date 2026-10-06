@@ -1,4 +1,6 @@
 import unittest
+from datetime import date
+from unittest import mock
 
 from market_pulse import market_close as mc
 
@@ -13,59 +15,149 @@ def series(*closes, last_ts=1_000_000):
     }
 
 
+def quote(price, previous):
+    return mc.parse_quote(series(previous, price))
+
+
+def sample_quotes(**overrides):
+    """A quote for every symbol: +1% by default, overridable per symbol."""
+    quotes = {symbol: quote(101, 100) for symbol in mc.ALL_SYMBOLS}
+    quotes.update(overrides)
+    return quotes
+
+
 class ParseQuoteTest(unittest.TestCase):
     def test_change_is_measured_from_the_previous_close(self):
-        quote = mc.parse_quote(series(90, 100, 102))
-        self.assertEqual(quote["price"], 102)
-        self.assertAlmostEqual(quote["change"], 2)
-        self.assertAlmostEqual(quote["change_pct"], 2.0)
-        self.assertEqual(quote["bar_ts"], 1_000_000)
+        q = mc.parse_quote(series(90, 100, 102))
+        self.assertEqual((q["price"], q["previous"], q["bar_ts"]), (102, 100, 1_000_000))
+        self.assertAlmostEqual(q["change"], 2)
+        self.assertAlmostEqual(q["change_pct"], 2.0)
 
     def test_missing_closes_are_skipped(self):
-        quote = mc.parse_quote(series(100, None, 110))
-        self.assertAlmostEqual(quote["change_pct"], 10.0)
+        self.assertAlmostEqual(mc.parse_quote(series(100, None, 110))["change_pct"], 10.0)
 
     def test_unusable_series(self):
         for entry in (None, {}, series(100), series(None, 100), series(0, 100), {"timestamp": None, "close": None}):
             self.assertIsNone(mc.parse_quote(entry), entry)
 
+    def test_intraday_needs_a_handful_of_points(self):
+        self.assertEqual(mc.parse_intraday({"close": [1, None, 2, 3, 4, 5]}), [1, 2, 3, 4, 5])
+        self.assertEqual(mc.parse_intraday({"close": [1, 2]}), [])
+        self.assertEqual(mc.parse_intraday(None), [])
+
+
+class FetchSparkTest(unittest.TestCase):
+    def test_symbols_are_requested_in_batches_and_merged(self):
+        def fake_get(url, params, **kwargs):
+            response = mock.Mock()
+            response.json.return_value = {s: series(1, 2) for s in params["symbols"].split(",")}
+            return response
+
+        with mock.patch.object(mc.requests, "get", side_effect=fake_get) as get:
+            payload = mc.fetch_spark(mc.ALL_SYMBOLS, "5d", "1d")
+
+        self.assertEqual(set(payload), set(mc.ALL_SYMBOLS))
+        batch_sizes = [len(call.kwargs["params"]["symbols"].split(",")) for call in get.call_args_list]
+        self.assertTrue(all(size <= mc.SPARK_BATCH_SIZE for size in batch_sizes))
+        self.assertEqual(sum(batch_sizes), len(mc.ALL_SYMBOLS))
+
+    def test_intraday_failure_does_not_block_the_summary(self):
+        with mock.patch.object(mc, "fetch_spark", side_effect=RuntimeError("down")), \
+                mock.patch("builtins.print"):
+            self.assertEqual(mc.load_intraday(), {})
+
 
 class MarketTradedTodayTest(unittest.TestCase):
-    def quotes(self, bar_age_hours, now=2_000_000):
-        return {"^GSPC": {"bar_ts": now - bar_age_hours * 3600}}, now
-
     def test_bar_from_this_session(self):
-        quotes, now = self.quotes(8)
-        self.assertTrue(mc.market_traded_today(quotes, now))
+        self.assertTrue(mc.market_traded_today({"^GSPC": {"bar_ts": 2_000_000 - 8 * 3600}}, 2_000_000))
 
     def test_holiday_or_weekend_bar_is_stale(self):
-        quotes, now = self.quotes(32)
-        self.assertFalse(mc.market_traded_today(quotes, now))
+        self.assertFalse(mc.market_traded_today({"^GSPC": {"bar_ts": 2_000_000 - 32 * 3600}}, 2_000_000))
 
     def test_no_index_data(self):
         self.assertFalse(mc.market_traded_today({}, 2_000_000))
 
 
 class FormattingTest(unittest.TestCase):
-    def test_percent_and_color(self):
+    def test_percent_arrow_and_color(self):
         self.assertEqual(mc.format_pct(0.584), "+0.58%")
         self.assertEqual(mc.format_pct(-3.2), "-3.20%")
+        self.assertEqual([mc.arrow(v) for v in (1, -1, 0.001)], ["▲", "▼", "—"])
         self.assertEqual(mc.change_color(1), mc.UP)
         self.assertEqual(mc.change_color(-1), mc.DOWN)
         self.assertEqual(mc.change_color(0.001), mc.FLAT)
 
+    def test_red_means_up(self):
+        self.assertTrue(mc.RED_UP)
+        self.assertEqual((mc.UP, mc.DOWN), (mc.RED, mc.GREEN))
+
     def test_yield_moves_are_shown_in_basis_points(self):
-        quote = {"change": -0.042, "change_pct": -0.79}
-        self.assertEqual(mc.format_macro_change(quote, "bps"), "-4.2 bps")
-        self.assertEqual(mc.format_macro_change(quote, "pct"), "-0.79%")
+        q = {"change": -0.042, "change_pct": -0.79}
+        self.assertEqual(mc.format_macro_change(q, "bps"), "-4.2 基点")
+        self.assertEqual(mc.format_macro_change(q, "pct"), "-0.79%")
 
-    def test_summary_lists_available_indices_in_order(self):
-        quotes = {"^DJI": {"change_pct": 0.49}, "^GSPC": {"change_pct": 0.58}}
-        self.assertEqual(mc.build_summary(quotes), "S&P 500 +0.58% · Dow Jones +0.49%")
+    def test_date_in_chinese(self):
+        self.assertEqual(mc.format_date(date(2026, 10, 6)), "2026年10月6日 周二")
+        self.assertEqual(mc.format_date(date(2026, 10, 11)), "2026年10月11日 周日")
 
-    def test_every_symbol_is_requested_once(self):
+    def test_vix_mood_bands(self):
+        self.assertEqual([mc.vix_mood(v) for v in (12, 15, 19.9, 20, 29.9, 30, 55)],
+                         ["市场平静", "波动正常", "波动正常", "情绪紧张", "情绪紧张", "市场恐慌", "市场恐慌"])
+
+    def test_heat_grows_with_the_move_and_saturates(self):
+        self.assertEqual(mc.heat_color(0, 2), mc.PANEL)
+        small, big, huge = (mc.heat_color(pct, 2) for pct in (0.2, 2, 9))
+        self.assertNotEqual(small, big)
+        self.assertEqual(big, huge)
+
+    def test_symbol_lists(self):
         self.assertEqual(len(mc.ALL_SYMBOLS), len(set(mc.ALL_SYMBOLS)))
-        self.assertEqual(len(mc.ALL_SYMBOLS), 20)
+        self.assertEqual(len(mc.ALL_SYMBOLS), 22)
+        self.assertEqual(mc.INTRADAY_SYMBOLS, ["^GSPC", "^IXIC", "^DJI", "IWM", "SOXX"])
+
+
+class RecapTest(unittest.TestCase):
+    def test_headline_tone(self):
+        down = quote(99, 100)
+        self.assertEqual(mc.build_headline(sample_quotes()), "三大指数集体收涨，标普500 +1.00%")
+        self.assertEqual(
+            mc.build_headline(sample_quotes(**{"^GSPC": down, "^IXIC": down, "^DJI": down})),
+            "三大指数集体收跌，标普500 -1.00%",
+        )
+        self.assertEqual(mc.build_headline(sample_quotes(**{"^DJI": down})), "三大指数涨跌不一，标普500 +1.00%")
+        self.assertEqual(mc.build_headline({}), "美股收盘")
+
+    def test_sectors_sorted_and_counted(self):
+        quotes = sample_quotes(XLU=quote(103, 100), XLV=quote(99, 100), XLE=quote(100, 100))
+        rows = mc.sector_rows(quotes)
+        self.assertEqual((rows[0][0], rows[-1][0]), ("公用事业", "医疗保健"))
+        self.assertEqual(mc.breadth(rows), (9, 1))
+
+    def test_embed_is_complete_and_in_chinese(self):
+        quotes = sample_quotes(XLU=quote(103, 100), XLV=quote(99, 100), **{"^VIX": quote(15.01, 15.52)})
+        embed = mc.build_embed(quotes, date(2026, 10, 6), "market_close.png")
+
+        self.assertEqual(embed["title"], "美股收盘 · 2026年10月6日 周二")
+        self.assertEqual(embed["image"], {"url": "attachment://market_close.png"})
+        self.assertEqual(embed["color"], int(mc.UP.lstrip("#"), 16))
+
+        indices, sectors, macro = (field["value"] for field in embed["fields"])
+        for name in ("标普500", "纳斯达克", "道琼斯", "罗素2000", "半导体"):
+            self.assertIn(name, indices)
+        self.assertIn("10 涨 1 跌", sectors)
+        self.assertIn("最强：公用事业 +3.00%", sectors)
+        self.assertIn("最弱：医疗保健 -1.00%", sectors)
+        self.assertIn("🔴 **标普500**　101.00　+1.00%（+1.00）", indices)
+        self.assertIn("**罗素2000**（IWM）", indices)
+        self.assertIn("🟢 **VIX 恐慌指数**　15.01　-3.29%（波动正常）", macro)
+        self.assertIn("基点", macro)
+        for field in embed["fields"]:
+            self.assertLessEqual(len(field["value"]), 1024)
+
+    def test_embed_survives_missing_data(self):
+        embed = mc.build_embed({"^GSPC": quote(101, 100)}, date(2026, 10, 6), "x.png")
+        self.assertEqual(embed["fields"][1]["value"], "暂无数据")
+        self.assertEqual(embed["fields"][2]["value"], "暂无数据")
 
 
 if __name__ == "__main__":

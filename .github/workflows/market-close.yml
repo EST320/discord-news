@@ -11,6 +11,7 @@ on:
     branches: [main]
     paths:
       - "market_pulse/market_close.py"
+      - "market_pulse/fonts.py"
       - "requirements/market_close.txt"
       - ".github/workflows/market-close.yml"
 
@@ -29,6 +30,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      # The chart is labelled in Chinese; the runner image ships no CJK font.
+      - name: Install Chinese font
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
 
       - name: Install dependencies
         run: pip install -r requirements/market_close.txt

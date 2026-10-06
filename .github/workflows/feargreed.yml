@@ -2,6 +2,15 @@ name: Fear and Greed Tracker
 
 on:
   workflow_dispatch:
+  # A change to the tracker triggers a dry run: fetch and render, post nothing.
+  push:
+    branches: [main]
+    paths:
+      - "market_pulse/fear_greed.py"
+      - "market_pulse/theme.py"
+      - "market_pulse/fonts.py"
+      - "requirements/fear_greed.txt"
+      - ".github/workflows/feargreed.yml"
 
 permissions:
   contents: write
@@ -24,6 +33,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Same typeface as the market close image, which needs a CJK font.
+      - name: Install chart font
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
+
       - name: Install dependencies
         run: pip install -r requirements/fear_greed.txt
 
@@ -31,6 +44,7 @@ jobs:
         run: python -m market_pulse.fear_greed
         env:
           DISCORD_WEBHOOK_URL_FEARGREED: ${{ secrets.DISCORD_WEBHOOK_URL_FEARGREED }}
+          DRY_RUN: ${{ github.event_name == 'push' }}
 
       - name: Save state
         run: bash scripts/save_state.sh seen_feargreed.json

@@ -11,6 +11,7 @@ on:
     paths:
       - "market_pulse/market_close.py"
       - "market_pulse/fonts.py"
+      - "market_pulse/theme.py"
       - "requirements/market_close.txt"
       - ".github/workflows/market-close.yml"
 
@@ -39,7 +40,7 @@ jobs:
 
       - name: Build and post market close summary
         env:
-          # Falls back to the Fear & Greed channel until a dedicated webhook is set.
+          # Shares the Fear & Greed channel unless a dedicated webhook is set.
           DISCORD_WEBHOOK_URL_MARKET: ${{ secrets.DISCORD_WEBHOOK_URL_MARKET || secrets.DISCORD_WEBHOOK_URL_FEARGREED }}
           DRY_RUN: ${{ github.event_name == 'push' }}
         run: python -m market_pulse.market_close

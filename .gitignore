@@ -5,7 +5,7 @@ __pycache__/
 
 # Images generated at runtime
 trump_cards/
-feargreed_charts/
+fear_greed.png
 earnings_calendar.png
 
 # Checkout of the `state` branch (tracker dedup state)

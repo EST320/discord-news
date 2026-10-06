@@ -13,7 +13,7 @@ In production since July 2026.
 
 | Fear & Greed | Earnings calendar |
 |---|---|
-| ![Fear & Greed gauges with historical values](docs/screenshots/fear-greed.png) | ![Weekly earnings calendar table](docs/screenshots/earnings-calendar.png) |
+| ![Stock and crypto Fear & Greed gauges side by side, with historical values](docs/screenshots/fear-greed.png) | ![Weekly earnings calendar table](docs/screenshots/earnings-calendar.png) |
 
 | Market close |
 |---|
@@ -25,7 +25,7 @@ In production since July 2026.
 |---|---|---|---|
 | [`wallstreetcn`](market_pulse/wallstreetcn.py) | Wallstreetcn live feed: US, A-share and HK channels | Headline + body | Every 2 minutes per channel |
 | [`truth_social`](market_pulse/truth_social.py) | CNN's public Truth Social archive | Chinese translation + card image of the original post | Every 5 minutes |
-| [`fear_greed`](market_pulse/fear_greed.py) | CNN Fear & Greed Index, alternative.me Crypto Fear & Greed Index | Gauge chart, historical comparison, change since last run | Scheduled |
+| [`fear_greed`](market_pulse/fear_greed.py) | CNN Fear & Greed Index, alternative.me Crypto Fear & Greed Index | One image with both gauges and their history, plus the change since last run | Scheduled |
 | [`earnings_calendar`](market_pulse/earnings_calendar.py) | Finnhub earnings calendar and company profile APIs | Table image of next week's earnings, Monday to Friday | Every Friday |
 | [`market_close`](market_pulse/market_close.py) | Yahoo Finance | Chinese-language image: S&P 500, Nasdaq, Dow, Russell 2000 (IWM), semiconductors (SOXX), a heat map of the 11 sectors, VIX, 10-year yield, dollar index, gold, oil, bitcoin | Weekdays, 4:15 pm New York time |
 | [`ipo_calendar`](market_pulse/ipo_calendar.py) | Finnhub IPO calendar API | Table image of expected US listings from today through the end of next week | Every Friday |
@@ -76,6 +76,7 @@ market-pulse-discord/
 │   ├── market_close.py
 │   ├── discord.py                            # Shared webhook client with bounded 429 retries
 │   ├── fonts.py                              # Finds a Chinese-capable font for chart text
+│   ├── theme.py                              # Shared dark palette and helpers for chart images
 │   └── paths.py                              # Repo-relative state/ and assets/ paths
 ├── scripts/
 │   ├── save_state.sh                         # Publishes state files to the state branch
@@ -171,8 +172,9 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 
 ### Fear & Greed
 
-- Fetches the CNN stock-market index and the alternative.me crypto index; either can fail without blocking the other.
-- Draws a gauge with Matplotlib, alongside historical values and the change since the previous run.
+- Fetches the CNN stock-market index and the alternative.me crypto index and posts them as one message: a single dark-themed image with the two gauges side by side, each with yesterday's, last week's and last month's reading.
+- The text gives each index's rating, value and change since the previous run.
+- Either index can fail without blocking the other; its panel then reads "No data".
 
 ### Earnings calendar
 
@@ -240,7 +242,7 @@ git worktree add state state
 | `DISCORD_WEBHOOK_URL_TRUMP` | Truth Social channel |
 | `DISCORD_WEBHOOK_URL_FEARGREED` | Fear & Greed channel |
 | `DISCORD_WEBHOOK_URL_EARNINGS` | Earnings calendar channel |
-| `DISCORD_WEBHOOK_URL_MARKET` | Market close channel. Optional: falls back to the Fear & Greed channel |
+| `DISCORD_WEBHOOK_URL_MARKET` | Market close channel. Optional: shares the Fear & Greed channel when unset |
 | `DISCORD_WEBHOOK_URL_IPO` | IPO calendar channel. Optional: falls back to the earnings calendar channel |
 | `DEEPL_API_KEY` | DeepL translation |
 | `FINNHUB_API_KEY` | Finnhub earnings and company data |

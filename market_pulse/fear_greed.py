@@ -1,3 +1,12 @@
+"""Fear & Greed tracker: the CNN stock-market index and the alternative.me
+crypto index, posted together as one image.
+
+Usage:
+    python -m market_pulse.fear_greed
+
+Set DRY_RUN=true to fetch and render without posting or touching state.
+"""
+
 import json
 import os
 from datetime import datetime, timezone, timedelta
@@ -13,12 +22,14 @@ import requests
 
 from market_pulse.discord import post_webhook
 from market_pulse.paths import STATE_DIR
+from market_pulse.theme import BG, GREEN, MUTED, RED, RULE, TEXT, Fonts, tile
 
 # ============================================================
 # Config
 # ============================================================
 
 TEST_MODE = False
+DRY_RUN = os.environ.get("DRY_RUN", "false").lower() in ("1", "true", "yes")
 
 CNN_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
 CRYPTO_URL = "https://api.alternative.me/fng/?limit=35"
@@ -26,13 +37,16 @@ CRYPTO_URL = "https://api.alternative.me/fng/?limit=35"
 WEBHOOK_ENV = "DISCORD_WEBHOOK_URL_FEARGREED"
 
 STATE_FILE = STATE_DIR / "seen_feargreed.json"
-CHART_DIR = Path("feargreed_charts")
+OUTPUT_FILE = Path("fear_greed.png")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "application/json",
     "Referer": "https://www.cnn.com/markets/fear-and-greed",
 }
+
+# Extreme Fear -> Extreme Greed, anchored on the theme's red and green.
+BAND_COLORS = [RED, "#f08c3a", "#e3c341", "#7cc66a", GREEN]
 
 
 # ============================================================
@@ -58,28 +72,41 @@ def save_state(state):
 # Generic rating helpers
 # ============================================================
 
-def rating_label(value):
+def rating_band(value):
     if value < 25:
-        return "Extreme Fear"
+        return 0
     if value < 45:
-        return "Fear"
+        return 1
     if value < 55:
-        return "Neutral"
+        return 2
     if value < 75:
-        return "Greed"
-    return "Extreme Greed"
+        return 3
+    return 4
+
+
+def rating_label(value):
+    return ("Extreme Fear", "Fear", "Neutral", "Greed", "Extreme Greed")[rating_band(value)]
 
 
 def rating_color(value):
-    if value < 25:
-        return "#d9534f"
-    if value < 45:
-        return "#e8974e"
-    if value < 55:
-        return "#e0c341"
-    if value < 75:
-        return "#8bc34a"
-    return "#4caf50"
+    return BAND_COLORS[rating_band(value)]
+
+
+def build_commentary(value, prev_value):
+    label = rating_label(value)
+
+    if prev_value is None:
+        trend = ""
+    else:
+        diff = value - prev_value
+        if abs(diff) < 0.5:
+            trend = " (flat)"
+        elif diff > 0:
+            trend = f" (+{diff:.1f})"
+        else:
+            trend = f" (-{abs(diff):.1f})"
+
+    return f"{label} ({value:.1f}){trend}."
 
 
 # ============================================================
@@ -93,20 +120,7 @@ def fetch_cnn_data():
 
 
 def build_cnn_commentary(score, prev_value):
-    label = rating_label(score)
-
-    if prev_value is None:
-        trend = ""
-    else:
-        diff = score - prev_value
-        if abs(diff) < 0.5:
-            trend = " (flat)"
-        elif diff > 0:
-            trend = f" (+{diff:.1f})"
-        else:
-            trend = f" (-{abs(diff):.1f})"
-
-    return f"{label} ({score:.1f}){trend}."
+    return build_commentary(score, prev_value)
 
 
 def get_cnn_history_value(series, days_ago):
@@ -152,6 +166,21 @@ def build_cnn_history(data):
     return history
 
 
+def load_cnn(state):
+    """One panel's worth of data: value, text commentary and history."""
+    data = fetch_cnn_data()
+    score = float(data.get("fear_and_greed", {}).get("score", 0))
+    return {
+        "key": "cnn_last",
+        "heading": "CNN Market Sentiment Tracker",
+        "title": "Stock Market",
+        "source": "CNN Business",
+        "value": score,
+        "commentary": build_cnn_commentary(score, state.get("cnn_last")),
+        "history": build_cnn_history(data),
+    }
+
+
 # ============================================================
 # Crypto Fear & Greed Index
 # ============================================================
@@ -164,20 +193,7 @@ def fetch_crypto_data():
 
 
 def build_crypto_commentary(current_value, prev_value):
-    label = rating_label(current_value)
-
-    if prev_value is None:
-        trend = ""
-    else:
-        diff = current_value - prev_value
-        if abs(diff) < 0.5:
-            trend = " (flat)"
-        elif diff > 0:
-            trend = f" (+{diff:.1f})"
-        else:
-            trend = f" (-{abs(diff):.1f})"
-
-    return f"{label} ({current_value:.1f}){trend}."
+    return build_commentary(current_value, prev_value)
 
 
 def build_crypto_history(entries):
@@ -199,122 +215,103 @@ def build_crypto_history(entries):
     ]
 
 
+def load_crypto(state):
+    entries = fetch_crypto_data()
+    if not entries:
+        raise RuntimeError("Crypto index returned no data")
+
+    current_value = float(entries[0]["value"])
+    prev_value = float(entries[1]["value"]) if len(entries) > 1 else None
+    return {
+        "key": "crypto_last",
+        "heading": "Crypto Market Sentiment Tracker",
+        "title": "Crypto Market",
+        "source": "alternative.me",
+        "value": current_value,
+        "commentary": build_crypto_commentary(current_value, prev_value),
+        "history": build_crypto_history(entries),
+    }
+
+
 # ============================================================
-# Gauge chart: gradient dial + Historical Values panel
+# Chart: both indices side by side, each a gauge plus history
 # ============================================================
 
-def draw_full_card(value, title, subtitle, icon_label, history, source_label, updated_at, out_path):
-    fig = plt.figure(figsize=(12, 5.4))
-    fig.patch.set_facecolor("white")
-
-    # ---- Left: gauge card ----
-    ax = fig.add_axes([0.03, 0.07, 0.50, 0.86])
-    ax.set_facecolor("white")
-    ax.set_xlim(-1.4, 1.4)
-    ax.set_ylim(-0.85, 1.35)
+def draw_gauge(fig, font, rect, value):
+    ax = fig.add_axes(rect)
+    ax.set_xlim(-1.32, 1.32)
+    ax.set_ylim(-0.62, 1.22)
     ax.set_aspect("equal")
     ax.axis("off")
 
-    ax.add_patch(plt.Circle((-1.22, 1.18), 0.09, facecolor="#f7931a", zorder=5))
-    ax.text(-1.22, 1.18, icon_label, fontsize=11, ha="center", va="center",
-            color="white", fontweight="bold", zorder=6)
-    ax.text(-1.05, 1.18, title, fontsize=18, ha="left", va="center", color="#2b2b2b", fontweight="bold")
-    ax.text(-1.25, 0.93, subtitle, fontsize=10, ha="left", va="center", color="#8a8f98")
-    ax.plot([-1.35, 1.35], [0.80, 0.80], color="#e5e5e5", linewidth=1)
+    cmap = LinearSegmentedColormap.from_list("fear_greed", BAND_COLORS)
+    r_outer, width, segments = 1.0, 0.20, 200
+    for i in range(segments):
+        t0, t1 = i / segments, (i + 1) / segments
+        ax.add_patch(mpatches.Wedge((0, 0), r_outer, 180 - t1 * 180, 180 - t0 * 180, width=width,
+                                    facecolor=cmap(t0), edgecolor="none"))
 
-    ax.text(-1.25, 0.60, "Now:", fontsize=12, ha="left", va="center", color="#555555")
-    ax.text(-1.25, 0.40, rating_label(value), fontsize=15, ha="left", va="center",
-            color=rating_color(value), fontweight="bold")
+    for tick in (0, 25, 50, 75, 100):
+        angle = np.radians(180 - tick / 100 * 180)
+        ax.text(1.16 * np.cos(angle), 1.16 * np.sin(angle), str(tick), fontproperties=font(10),
+                color=MUTED, ha="center", va="center")
 
-    cmap = LinearSegmentedColormap.from_list(
-        "fg", ["#d9534f", "#e8974e", "#e0c341", "#8bc34a", "#4caf50"]
-    )
-    r_outer = 0.60
-    r_inner = 0.40
-    n_seg = 200
-    cy = -0.08
+    angle = np.radians(180 - max(0, min(value, 100)) / 100 * 180)
+    ax.plot([0, 0.70 * np.cos(angle)], [0, 0.70 * np.sin(angle)], color=TEXT, linewidth=4.5,
+            solid_capstyle="round", zorder=5)
+    ax.add_patch(plt.Circle((0, 0), 0.075, color=TEXT, zorder=6))
 
-    for i in range(n_seg):
-        t0 = i / n_seg
-        t1 = (i + 1) / n_seg
-        theta1 = 180 - t0 * 180
-        theta2 = 180 - t1 * 180
-        color = cmap(t0)
-        wedge = mpatches.Wedge((0, cy), r_outer, theta2, theta1, width=r_outer - r_inner,
-                                facecolor=color, edgecolor="none")
-        ax.add_patch(wedge)
+    color = rating_color(value)
+    ax.text(0, -0.27, f"{value:.0f}", fontproperties=font(34, bold=True), color=color, ha="center", va="center")
+    ax.text(0, -0.52, rating_label(value), fontproperties=font(14, bold=True), color=color, ha="center", va="center")
 
-    for tick in [0, 25, 50, 75, 100]:
-        angle = np.radians(180 - (tick / 100) * 180)
-        ox1, oy1 = (r_outer + 0.02) * np.cos(angle), cy + (r_outer + 0.02) * np.sin(angle)
-        ox2, oy2 = (r_outer + 0.08) * np.cos(angle), cy + (r_outer + 0.08) * np.sin(angle)
-        ax.plot([ox1, ox2], [oy1, oy2], color="#999999", linewidth=1.3)
-        tx, ty = (r_outer + 0.18) * np.cos(angle), cy + (r_outer + 0.18) * np.sin(angle)
-        ax.text(tx, ty, str(tick), ha="center", va="center", fontsize=9.5, color="#888888")
 
-    for tick in range(0, 101, 5):
-        if tick % 25 == 0:
-            continue
-        angle = np.radians(180 - (tick / 100) * 180)
-        ox1, oy1 = (r_outer + 0.01) * np.cos(angle), cy + (r_outer + 0.01) * np.sin(angle)
-        ox2, oy2 = (r_outer + 0.04) * np.cos(angle), cy + (r_outer + 0.04) * np.sin(angle)
-        ax.plot([ox1, ox2], [oy1, oy2], color="#c7c7c7", linewidth=0.8)
+def draw_history(fig, font, rect, history):
+    """Yesterday / last week / last month, each with its value and rating."""
+    left, bottom, width, height = rect
+    past = history[1:]
+    gap = 0.012
+    cell_width = (width - gap * (len(past) - 1)) / len(past)
+    for i, (label, value) in enumerate(past):
+        ax = tile(fig, [left + i * (cell_width + gap), bottom, cell_width, height], BG)
+        color = rating_color(value)
+        ax.text(0.5, 0.80, label, fontproperties=font(10.5), color=MUTED, ha="center", va="center")
+        ax.text(0.5, 0.47, f"{value:.0f}", fontproperties=font(19, bold=True), color=color, ha="center", va="center")
+        ax.text(0.5, 0.17, rating_label(value), fontproperties=font(10, bold=True), color=color, ha="center", va="center")
 
-    needle_angle = np.radians(180 - (value / 100) * 180)
-    needle_len = r_inner - 0.02
-    nx, ny = needle_len * np.cos(needle_angle), cy + needle_len * np.sin(needle_angle)
-    ax.plot([0, nx], [cy, ny], color="#aeaeae", linewidth=5, solid_capstyle="round", zorder=5)
 
-    badge_r = 0.13
-    badge_dist = r_inner + 0.30
-    bx = badge_dist * np.cos(needle_angle)
-    by = cy + badge_dist * np.sin(needle_angle)
-    ax.add_patch(plt.Circle((bx, by), badge_r, color=rating_color(value), zorder=6))
-    ax.text(bx, by, str(int(round(value))), ha="center", va="center", fontsize=17,
-            color="white", fontweight="bold", zorder=7)
+def draw_panel(fig, font, rect, panel):
+    left, bottom, width, height = rect
+    ax = tile(fig, rect)
+    ax.text(0.05, 0.93, panel["title"], fontproperties=font(16, bold=True), color=TEXT, ha="left", va="center")
+    ax.text(0.95, 0.93, panel["source"], fontproperties=font(10.5), color=MUTED, ha="right", va="center")
+    ax.plot([0.05, 0.95], [0.865, 0.865], color=RULE, linewidth=1)
 
-    icon_r = 0.07
-    icon_dist = r_inner * 0.5
-    icx, icy = icon_dist * np.cos(needle_angle), cy + icon_dist * np.sin(needle_angle)
-    ax.add_patch(plt.Circle((icx, icy), icon_r, facecolor="#f7931a", edgecolor="white", linewidth=1.5, zorder=8))
-    ax.text(icx, icy, icon_label, ha="center", va="center", fontsize=9, color="white", fontweight="bold", zorder=9)
+    if panel.get("value") is None:
+        ax.text(0.5, 0.45, "No data", fontproperties=font(15), color=MUTED, ha="center", va="center")
+        return
 
-    ax.plot([-1.35, 1.35], [-0.72, -0.72], color="#e5e5e5", linewidth=1)
-    ax.text(0, -0.82, source_label, fontsize=9, color="#a5a9af", ha="center")
+    draw_gauge(fig, font, [left + width * 0.08, bottom + height * 0.27, width * 0.84, height * 0.58], panel["value"])
+    draw_history(fig, font, [left + width * 0.05, bottom + height * 0.045, width * 0.90, height * 0.215],
+                 panel["history"])
 
-    # ---- Right: Historical Values ----
-    ax2 = fig.add_axes([0.57, 0.07, 0.41, 0.86])
-    ax2.set_facecolor("white")
-    ax2.set_xlim(0, 1)
-    ax2.set_ylim(0, 1)
-    ax2.axis("off")
 
-    ax2.text(0, 0.97, "Historical Values", fontsize=17, fontweight="bold", color="#2b2b2b", ha="left", va="top")
+def draw_card(panels, out_path=OUTPUT_FILE):
+    font = Fonts()
+    fig = plt.figure(figsize=(12, 6.3))
+    fig.patch.set_facecolor(BG)
 
-    n_items = len(history)
-    row_h = 0.82 / n_items
-    top_y = 0.80
+    fig.text(0.03, 0.948, "Fear & Greed Index", fontproperties=font(13), color=MUTED, ha="left", va="center")
+    fig.text(0.97, 0.948, datetime.now(timezone.utc).strftime("%b %d, %Y"), fontproperties=font(13),
+             color=MUTED, ha="right", va="center")
 
-    for i, (label, val) in enumerate(history):
-        y = top_y - i * row_h
-        ax2.text(0, y, label, fontsize=12.5, color="#555555", ha="left", va="top")
-        ax2.text(0, y - row_h * 0.42, rating_label(val), fontsize=13.5, color=rating_color(val),
-                 fontweight="bold", ha="left", va="top")
+    gap = 0.012
+    width = (0.94 - gap) / 2
+    for i, panel in enumerate(panels):
+        draw_panel(fig, font, [0.03 + i * (width + gap), 0.045, width, 0.865], panel)
 
-        badge_r2 = 0.055
-        bcx, bcy = 0.90, y - row_h * 0.20
-        ax2.add_patch(plt.Circle((bcx, bcy), badge_r2, color=rating_color(val), zorder=5))
-        ax2.text(bcx, bcy, str(int(round(val))), ha="center", va="center", fontsize=13,
-                 color="white", fontweight="bold", zorder=6)
-
-        if i < n_items - 1:
-            line_y = y - row_h + row_h * 0.10
-            ax2.plot([0, 1], [line_y, line_y], color="#eeeeee", linewidth=1)
-
-    CHART_DIR.mkdir(parents=True, exist_ok=True)
-    plt.savefig(out_path, dpi=150, facecolor="white", bbox_inches="tight")
-    plt.close()
-
+    plt.savefig(out_path, dpi=110, facecolor=BG)
+    plt.close(fig)
     return out_path
 
 
@@ -322,20 +319,26 @@ def draw_full_card(value, title, subtitle, icon_label, history, source_label, up
 # Discord posting
 # ============================================================
 
-def post_to_discord(title, commentary, value, updated_at, chart_path, color):
-    embed = {
-        "title": title,
-        "description": commentary,
-        "color": color,
+def build_embed(panels, image_name):
+    """One embed: each index keeps its heading, commentary and current value, side by side."""
+    available = [panel for panel in panels if panel.get("value") is not None]
+    return {
+        "color": int(rating_color(available[0]["value"]).lstrip("#"), 16),
         "fields": [
-            {"name": "Current Value", "value": f"{value:.2f}", "inline": True},
+            {
+                "name": panel["heading"],
+                "value": f"{panel['commentary']}\n**Current Value**\n{panel['value']:.2f}",
+                "inline": True,
+            }
+            for panel in available
         ],
-        "image": {"url": f"attachment://{chart_path.name}"},
+        "image": {"url": f"attachment://{image_name}"},
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    payload = {"embeds": [embed], "allowed_mentions": {"parse": []}}
 
+def post_to_discord(panels, chart_path):
+    payload = {"embeds": [build_embed(panels, chart_path.name)], "allowed_mentions": {"parse": []}}
     post_webhook(
         os.environ[WEBHOOK_ENV],
         payload,
@@ -346,94 +349,59 @@ def post_to_discord(title, commentary, value, updated_at, chart_path, color):
 
 
 # ============================================================
-# Main: CNN section
-# ============================================================
-
-def run_cnn(state):
-    data = fetch_cnn_data()
-    fg = data.get("fear_and_greed", {})
-    score = float(fg.get("score", 0))
-    prev_value = state.get("cnn_last")
-
-    commentary = build_cnn_commentary(score, prev_value)
-    history = build_cnn_history(data)
-    updated_at = datetime.now().strftime("Last updated %b %d, %Y")
-
-    chart_path = draw_full_card(
-        score, "Fear & Greed Index", "CNN Business Stock Market Sentiment",
-        "$", history, "cnn.com", updated_at, CHART_DIR / "cnn_gauge.png"
-    )
-
-    post_to_discord("CNN Market Sentiment Tracker", commentary, score, updated_at, chart_path, color=15105642)
-
-    state["cnn_last"] = score
-    print(f"CNN index posted: {score:.2f} ({rating_label(score)})")
-
-
-# ============================================================
-# Main: Crypto section
-# ============================================================
-
-def run_crypto(state):
-    entries = fetch_crypto_data()
-    if not entries:
-        print("Crypto data empty, skipping.")
-        return
-
-    current_value = float(entries[0]["value"])
-    prev_value = float(entries[1]["value"]) if len(entries) > 1 else None
-
-    commentary = build_crypto_commentary(current_value, prev_value)
-    history = build_crypto_history(entries)
-
-    updated_at = datetime.fromtimestamp(
-        int(entries[0]["timestamp"]), tz=timezone.utc
-    ).strftime("Last updated %b %d, %Y")
-
-    chart_path = draw_full_card(
-        current_value, "Fear & Greed Index", "Multifactorial Crypto Market Sentiment Analysis",
-        "B", history, "alternative.me", updated_at, CHART_DIR / "crypto_gauge.png"
-    )
-
-    post_to_discord("Crypto Market Sentiment Tracker", commentary, current_value, updated_at, chart_path, color=15844367)
-
-    state["crypto_last"] = current_value
-    print(f"Crypto index posted: {current_value:.2f} ({rating_label(current_value)})")
-
-
-# ============================================================
 # Entry point
 # ============================================================
 
+def load_panels(state):
+    """Fetch both indices. One failing leaves a 'No data' panel; it does not block the other."""
+    panels = []
+    for loader, title, source in ((load_cnn, "Stock Market", "CNN Business"),
+                                  (load_crypto, "Crypto Market", "alternative.me")):
+        try:
+            panels.append(loader(state))
+        except Exception as exc:
+            print(f"{title} index fetch failed: {exc!r}")
+            panels.append({"title": title, "source": source, "value": None})
+    return panels
+
+
+def sample_panels():
+    return [
+        {"key": "cnn_last", "heading": "CNN Market Sentiment Tracker (Test)", "title": "Stock Market",
+         "source": "CNN Business", "value": 37.51, "commentary": "This is a test message.",
+         "history": [("Now", 37.51), ("Yesterday", 38.6), ("Last week", 41.2), ("Last month", 35.0)]},
+        {"key": "crypto_last", "heading": "Crypto Market Sentiment Tracker (Test)", "title": "Crypto Market",
+         "source": "alternative.me", "value": 70.0, "commentary": "This is a test message.",
+         "history": [("Now", 70.0), ("Yesterday", 65.0), ("Last week", 74.0), ("Last month", 73.0)]},
+    ]
+
+
 def main():
-    os.environ[WEBHOOK_ENV]  # fail fast on missing configuration
+    if not DRY_RUN:
+        os.environ[WEBHOOK_ENV]  # fail fast on missing configuration
     state = load_state()
 
     if TEST_MODE:
-        history = [("Now", 37.51), ("Yesterday", 38.6), ("Last week", 41.2), ("Last month", 35.0)]
-        updated_at = datetime.now().strftime("Last updated %b %d, %Y")
-        chart_path = draw_full_card(
-            37.51, "Fear & Greed Index", "CNN Business Stock Market Sentiment",
-            "$", history, "cnn.com", updated_at, CHART_DIR / "test_gauge.png"
-        )
-        post_to_discord(
-            "CNN Market Sentiment Tracker (Test)",
-            "This is a test message to verify the webhook, chart generation, and posting pipeline.",
-            37.51, updated_at, chart_path, color=15105642,
-        )
+        panels = sample_panels()
+        post_to_discord(panels, draw_card(panels))
         print("Test succeeded: sample gauge message sent.")
         return
 
-    try:
-        run_cnn(state)
-    except Exception as exc:
-        print(f"CNN fetch/post failed: {exc}")
+    panels = load_panels(state)
+    available = [panel for panel in panels if panel.get("value") is not None]
+    if not available:
+        raise RuntimeError("Neither index could be fetched, nothing to post.")
 
-    try:
-        run_crypto(state)
-    except Exception as exc:
-        print(f"Crypto fetch/post failed: {exc}")
+    chart_path = draw_card(panels)
+    if DRY_RUN:
+        print(f"[dry run] rendered {chart_path} with {len(available)}/{len(panels)} indices")
+        return
 
+    post_to_discord(panels, chart_path)
+
+    for panel in available:
+        state[panel["key"]] = panel["value"]
+        print(f"{panel['title']} index posted: {panel['value']:.2f} ({rating_label(panel['value'])})")
     save_state(state)
 
 

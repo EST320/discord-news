@@ -18,13 +18,11 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from matplotlib.colors import to_rgb
-from matplotlib.font_manager import FontProperties
 from matplotlib.transforms import Bbox
 import requests
 
 from market_pulse.discord import post_webhook
-from market_pulse.fonts import cjk_font_paths
+from market_pulse.theme import BG, GREEN, MUTED, PANEL, RED, RULE, TEXT, Fonts, blend, tile
 
 WEBHOOK_ENV = "DISCORD_WEBHOOK_URL_MARKET"
 DRY_RUN = os.environ.get("DRY_RUN", "false").lower() in ("1", "true", "yes")
@@ -93,15 +91,8 @@ WEEKDAYS = "一二三四五六日"
 # for the mainland Chinese convention (red up, green down). Every number
 # also carries an arrow and a sign, so the chart reads the same either way.
 RED_UP = False
-RED, GREEN = "#f0453a", "#22b573"
 UP, DOWN = (RED, GREEN) if RED_UP else (GREEN, RED)
 FLAT = "#8a8f98"
-
-BG = "#171b24"
-PANEL = "#232936"
-TEXT = "#EDEFF2"
-MUTED = "#8d94a1"
-RULE = "#333a48"
 
 # A move of this size (in percent) gets a fully saturated tile.
 INDEX_HEAT_CAP = 2.0
@@ -281,38 +272,12 @@ def build_embed(quotes, session_date, image_name):
 # Chart
 # ============================================================
 
-def blend(base, tint, amount):
-    base_rgb, tint_rgb = to_rgb(base), to_rgb(tint)
-    return tuple(b + (t - b) * amount for b, t in zip(base_rgb, tint_rgb))
-
-
 def heat_color(pct, cap):
     """Tile background: the panel colour shifted toward up/down by the size of the move."""
     if direction(pct) == 0:
         return PANEL
     strength = min(abs(pct) / cap, 1.0)
     return blend(PANEL, change_color(pct), 0.18 + 0.62 * strength)
-
-
-class Fonts:
-    def __init__(self):
-        regular, bold = cjk_font_paths()
-        self.regular, self.bold = regular, bold
-
-    def __call__(self, size, bold=False):
-        return FontProperties(fname=self.bold if bold else self.regular, size=size)
-
-
-def tile(fig, rect, color=PANEL):
-    ax = fig.add_axes(rect)
-    ax.set_facecolor(color)
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.set_xticks([])
-    ax.set_yticks([])
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-    return ax
 
 
 def draw_sparkline(fig, rect, closes, previous, color):

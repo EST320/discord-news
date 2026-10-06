@@ -1,5 +1,8 @@
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest import mock
 
 from market_pulse import fear_greed as fg
 
@@ -55,6 +58,80 @@ class HistoryTest(unittest.TestCase):
             fg.build_crypto_history(entries),
             [("Now", 70.0), ("Yesterday", 65.0), ("Last week", 60.0), ("Last month", 60.0)],
         )
+
+
+def panel(key, heading, value, commentary):
+    return {"key": key, "heading": heading, "title": heading.split()[0], "source": "src",
+            "value": value, "commentary": commentary, "history": [("Now", value)] * 4}
+
+
+CNN = panel("cnn_last", "CNN Market Sentiment Tracker", 43.23, "Fear (43.2) (-0.6).")
+CRYPTO = panel("crypto_last", "Crypto Market Sentiment Tracker", 70.0, "Greed (70.0) (+5.0).")
+MISSING = {"title": "Crypto Market", "source": "alternative.me", "value": None}
+
+
+class EmbedTest(unittest.TestCase):
+    def test_both_indices_share_one_embed_with_their_original_text(self):
+        embed = fg.build_embed([CNN, CRYPTO], "fear_greed.png")
+        self.assertEqual(embed["image"], {"url": "attachment://fear_greed.png"})
+        self.assertEqual(embed["fields"], [
+            {"name": "CNN Market Sentiment Tracker",
+             "value": "Fear (43.2) (-0.6).\n**Current Value**\n43.23", "inline": True},
+            {"name": "Crypto Market Sentiment Tracker",
+             "value": "Greed (70.0) (+5.0).\n**Current Value**\n70.00", "inline": True},
+        ])
+        self.assertEqual(embed["color"], int(fg.rating_color(43.23).lstrip("#"), 16))
+
+    def test_an_index_without_data_is_left_out_of_the_text(self):
+        embed = fg.build_embed([CNN, MISSING], "x.png")
+        self.assertEqual([field["name"] for field in embed["fields"]], ["CNN Market Sentiment Tracker"])
+
+
+class MainTest(unittest.TestCase):
+    def setUp(self):
+        self.state_file = Path(tempfile.mkdtemp()) / "seen_feargreed.json"
+        self.post = mock.Mock()
+        patches = [
+            mock.patch.object(fg, "STATE_FILE", self.state_file),
+            mock.patch.object(fg, "post_to_discord", self.post),
+            mock.patch.object(fg, "draw_card", return_value=Path("fear_greed.png")),
+            mock.patch.object(fg, "DRY_RUN", False),
+            mock.patch.dict("os.environ", {fg.WEBHOOK_ENV: "hook"}),
+            mock.patch("builtins.print"),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def run_main(self, cnn, crypto):
+        def loader(result):
+            return mock.Mock(side_effect=result) if isinstance(result, Exception) else mock.Mock(return_value=result)
+        with mock.patch.object(fg, "load_cnn", loader(cnn)), mock.patch.object(fg, "load_crypto", loader(crypto)):
+            fg.main()
+
+    def test_posts_once_and_records_both_values(self):
+        self.run_main(CNN, CRYPTO)
+        self.post.assert_called_once()
+        self.assertEqual(fg.load_state(), {"cnn_last": 43.23, "crypto_last": 70.0})
+
+    def test_one_failing_index_does_not_block_the_other(self):
+        fg.save_state({"cnn_last": 40.0, "crypto_last": 65.0})
+        self.run_main(CNN, RuntimeError("alternative.me down"))
+        panels = self.post.call_args.args[0]
+        self.assertEqual([p["value"] for p in panels], [43.23, None])
+        # The failed index keeps its previous value for the next comparison.
+        self.assertEqual(fg.load_state(), {"cnn_last": 43.23, "crypto_last": 65.0})
+
+    def test_nothing_is_posted_when_both_fail(self):
+        with self.assertRaises(RuntimeError):
+            self.run_main(RuntimeError("a"), RuntimeError("b"))
+        self.post.assert_not_called()
+
+    def test_dry_run_neither_posts_nor_saves(self):
+        with mock.patch.object(fg, "DRY_RUN", True):
+            self.run_main(CNN, CRYPTO)
+        self.post.assert_not_called()
+        self.assertFalse(self.state_file.exists())
 
 
 if __name__ == "__main__":

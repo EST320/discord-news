@@ -182,7 +182,7 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 
 ### Market close
 
-- Runs at 21:30 UTC on weekdays, which is after the 4 pm New York close in both daylight and standard time.
+- Posts at 4:15 pm New York time on weekdays, right after the close, all year round. GitHub's cron is UTC only, so the workflow has one entry for daylight time (20:15 UTC) and one for standard time (21:15 UTC), and a gate job lets through only the entry that matches New York's current UTC offset. The decision is based on which entry fired rather than on the clock, so a delayed start cannot make the right run skip itself.
 - Written for a Chinese-language channel: the image and the text recap are in Chinese, and colours follow the US convention of green for up and red for down (`RED_UP` in the module flips it to the mainland Chinese convention). Every number also carries an arrow and a sign.
 - Five index tiles (S&P 500, Nasdaq, Dow, plus IWM for small caps and SOXX for semiconductors) show the move, the close and the session's intraday path against the previous close.
 - Sectors are tracked through the Select Sector SPDR ETFs and drawn as a heat map, strongest first, with colour depth proportional to the move.

@@ -183,7 +183,7 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 ### Market close
 
 - Runs at 21:30 UTC on weekdays, which is after the 4 pm New York close in both daylight and standard time.
-- Written for a Chinese-language channel: the image and the text recap are in Chinese, and colours follow the Chinese market convention of red for up and green for down (`RED_UP` in the module flips it). Every number also carries an arrow and a sign.
+- Written for a Chinese-language channel: the image and the text recap are in Chinese, and colours follow the US convention of green for up and red for down (`RED_UP` in the module flips it to the mainland Chinese convention). Every number also carries an arrow and a sign.
 - Five index tiles (S&P 500, Nasdaq, Dow, plus IWM for small caps and SOXX for semiconductors) show the move, the close and the session's intraday path against the previous close.
 - Sectors are tracked through the Select Sector SPDR ETFs and drawn as a heat map, strongest first, with colour depth proportional to the move.
 - The text recap lists every index, the sector breadth with the three strongest and weakest sectors, and each macro gauge. The 10-year yield's move is given in basis points and the VIX gets a plain-language reading.

@@ -87,9 +87,10 @@ class FormattingTest(unittest.TestCase):
         self.assertEqual(mc.change_color(-1), mc.DOWN)
         self.assertEqual(mc.change_color(0.001), mc.FLAT)
 
-    def test_red_means_up(self):
-        self.assertTrue(mc.RED_UP)
-        self.assertEqual((mc.UP, mc.DOWN), (mc.RED, mc.GREEN))
+    def test_green_means_up(self):
+        self.assertFalse(mc.RED_UP)
+        self.assertEqual((mc.UP, mc.DOWN), (mc.GREEN, mc.RED))
+        self.assertEqual([mc.dot(v) for v in (1, -1, 0)], ["🟢", "🔴", "⚪"])
 
     def test_yield_moves_are_shown_in_basis_points(self):
         q = {"change": -0.042, "change_pct": -0.79}
@@ -147,9 +148,9 @@ class RecapTest(unittest.TestCase):
         self.assertIn("10 涨 1 跌", sectors)
         self.assertIn("最强：公用事业 +3.00%", sectors)
         self.assertIn("最弱：医疗保健 -1.00%", sectors)
-        self.assertIn("🔴 **标普500**　101.00　+1.00%（+1.00）", indices)
+        self.assertIn("🟢 **标普500**　101.00　+1.00%（+1.00）", indices)
         self.assertIn("**罗素2000**（IWM）", indices)
-        self.assertIn("🟢 **VIX 恐慌指数**　15.01　-3.29%（波动正常）", macro)
+        self.assertIn("🔴 **VIX 恐慌指数**　15.01　-3.29%（波动正常）", macro)
         self.assertIn("基点", macro)
         for field in embed["fields"]:
             self.assertLessEqual(len(field["value"]), 1024)

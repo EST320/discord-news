@@ -88,9 +88,10 @@ INTRADAY_SYMBOLS = [row[0] for row in INDICES]
 
 WEEKDAYS = "一二三四五六日"
 
-# Chinese market convention: red means up, green means down. Every number
+# US market convention: green means up, red means down. Set RED_UP to True
+# for the mainland Chinese convention (red up, green down). Every number
 # also carries an arrow and a sign, so the chart reads the same either way.
-RED_UP = True
+RED_UP = False
 RED, GREEN = "#f0453a", "#22b573"
 UP, DOWN = (RED, GREEN) if RED_UP else (GREEN, RED)
 FLAT = "#8a8f98"

@@ -1,0 +1,86 @@
+import unittest
+from datetime import date
+
+from market_pulse import ipo_calendar as ic
+
+MONDAY, FRIDAY = date(2026, 10, 12), date(2026, 10, 16)
+
+
+def entry(day, symbol, size=0, status="expected", **extra):
+    return {
+        "date": f"2026-10-{day:02d}",
+        "symbol": symbol,
+        "name": f"{symbol} Corp",
+        "status": status,
+        "totalSharesValue": size,
+        **extra,
+    }
+
+
+class FormattingTest(unittest.TestCase):
+    def test_amounts(self):
+        self.assertEqual(ic.format_amount(2_040_000_000, "$"), "$2.0B")
+        self.assertEqual(ic.format_amount(25_000_000), "25.0M")
+        self.assertEqual(ic.format_amount("7500"), "7.5K")
+        self.assertEqual(ic.format_amount(950), "950")
+        for missing in (None, 0, "", "n/a"):
+            self.assertEqual(ic.format_amount(missing), "-")
+
+    def test_prices(self):
+        self.assertEqual(ic.format_price("18.00-21.00"), "$18.00 - 21.00")
+        self.assertEqual(ic.format_price("15"), "$15.00")
+        self.assertEqual(ic.format_price(12.5), "$12.50")
+        self.assertEqual(ic.format_price(None), "-")
+
+    def test_price_cell_never_holds_two_dollar_signs(self):
+        # Plotly would render the text between them as LaTeX.
+        self.assertEqual(ic.format_price("4.00-6.00").count("$"), 1)
+
+
+class SelectListingsTest(unittest.TestCase):
+    def symbols(self, entries):
+        return [item["symbol"] for item in ic.select_listings(entries, MONDAY, FRIDAY)]
+
+    def test_orders_by_date_then_largest_deal(self):
+        entries = [entry(16, "LATE", 900), entry(13, "SMALL", 10), entry(13, "BIG", 500)]
+        self.assertEqual(self.symbols(entries), ["BIG", "SMALL", "LATE"])
+
+    def test_keeps_only_expected_and_priced(self):
+        entries = [
+            entry(13, "EXP"), entry(13, "PRC", status="priced"), entry(13, "UPPER", status="EXPECTED"),
+            entry(13, "FILED", status="filed"), entry(13, "GONE", status="withdrawn"), entry(13, "NONE", status=None),
+        ]
+        self.assertEqual(sorted(self.symbols(entries)), ["EXP", "PRC", "UPPER"])
+
+    def test_drops_entries_outside_the_week_or_without_a_date(self):
+        entries = [entry(11, "SUN"), entry(17, "SAT"), entry(12, "MON"), {**entry(13, "BAD"), "date": "soon"}]
+        self.assertEqual(self.symbols(entries), ["MON"])
+
+    def test_drops_entries_with_neither_name_nor_symbol(self):
+        entries = [{**entry(13, ""), "name": ""}, {**entry(13, ""), "name": "Nameless SPAC"}]
+        self.assertEqual([i["name"] for i in ic.select_listings(entries, MONDAY, FRIDAY)], ["Nameless SPAC"])
+
+    def test_all_caps_names_are_title_cased(self):
+        listing = ic.select_listings([{**entry(13, "ACRB"), "name": "ACME ROBOTICS INC"}], MONDAY, FRIDAY)[0]
+        self.assertEqual(listing["name"], "Acme Robotics Inc")
+
+
+class BuildRowsTest(unittest.TestCase):
+    def test_date_is_printed_once_per_day_and_gaps_become_dashes(self):
+        listings = ic.select_listings(
+            [
+                entry(13, "BIG", 500, price="18.00-21.00", numberOfShares=25_000_000, exchange="NYSE"),
+                entry(13, "SMALL", 10),
+                entry(15, "THU", 5),
+            ],
+            MONDAY, FRIDAY,
+        )
+        rows = ic.build_rows(listings)
+        self.assertEqual([row[0] for row in rows], ["<b>Tue Oct 13</b>", "", "<b>Thu Oct 15</b>"])
+        self.assertEqual(rows[0][1:], ("<b>$BIG</b>", "BIG Corp", "NYSE", "$18.00 - 21.00", "25.0M", "$500"))
+        self.assertEqual(rows[1][3:], ("-", "-", "-", "$10"))
+        self.assertEqual(len(rows[0]), len(ic.COLUMNS))
+
+
+if __name__ == "__main__":
+    unittest.main()

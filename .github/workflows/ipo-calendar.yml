@@ -1,0 +1,42 @@
+name: Weekly IPO Calendar to Discord
+
+on:
+  schedule:
+    # Saturday 02:10 UTC (Friday evening in New York), covering the week ahead.
+    - cron: "10 2 * * 6"
+  workflow_dispatch:
+  # A change to the tracker triggers a dry run: fetch and render, post nothing.
+  push:
+    branches: [main]
+    paths:
+      - "market_pulse/ipo_calendar.py"
+      - "requirements/earnings.txt"
+      - ".github/workflows/ipo-calendar.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  post-ipo-calendar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Same table-rendering stack as the earnings calendar (plotly + kaleido).
+      - name: Install dependencies
+        run: pip install -r requirements/earnings.txt
+
+      - name: Fetch and post IPO calendar
+        env:
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          # Falls back to the earnings calendar channel until a dedicated webhook is set.
+          DISCORD_WEBHOOK_URL_IPO: ${{ secrets.DISCORD_WEBHOOK_URL_IPO || secrets.DISCORD_WEBHOOK_URL_EARNINGS }}
+          DRY_RUN: ${{ github.event_name == 'push' }}
+        run: python -m market_pulse.ipo_calendar

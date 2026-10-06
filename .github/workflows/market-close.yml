@@ -1,0 +1,41 @@
+name: US Market Close Summary
+
+on:
+  schedule:
+    # 21:30 UTC, Monday to Friday: after the 4 pm New York close in both
+    # daylight time (20:00 UTC) and standard time (21:00 UTC).
+    - cron: "30 21 * * 1-5"
+  workflow_dispatch:
+  # A change to the tracker triggers a dry run: fetch and render, post nothing.
+  push:
+    branches: [main]
+    paths:
+      - "market_pulse/market_close.py"
+      - "requirements/market_close.txt"
+      - ".github/workflows/market-close.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  post-market-close:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements/market_close.txt
+
+      - name: Build and post market close summary
+        env:
+          # Falls back to the Fear & Greed channel until a dedicated webhook is set.
+          DISCORD_WEBHOOK_URL_MARKET: ${{ secrets.DISCORD_WEBHOOK_URL_MARKET || secrets.DISCORD_WEBHOOK_URL_FEARGREED }}
+          DRY_RUN: ${{ github.event_name == 'push' }}
+        run: python -m market_pulse.market_close

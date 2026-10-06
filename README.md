@@ -15,6 +15,10 @@ In production since July 2026.
 |---|---|
 | ![Fear & Greed gauges with historical values](docs/screenshots/fear-greed.png) | ![Weekly earnings calendar table](docs/screenshots/earnings-calendar.png) |
 
+| Market close |
+|---|
+| ![US market close summary: indices, sectors, rates, volatility and commodities](docs/screenshots/market-close.png) |
+
 ## Trackers
 
 | Tracker | Source | Posts | Cadence |
@@ -23,6 +27,8 @@ In production since July 2026.
 | [`truth_social`](market_pulse/truth_social.py) | CNN's public Truth Social archive | Chinese translation + card image of the original post | Every 5 minutes |
 | [`fear_greed`](market_pulse/fear_greed.py) | CNN Fear & Greed Index, alternative.me Crypto Fear & Greed Index | Gauge chart, historical comparison, change since last run | Scheduled |
 | [`earnings_calendar`](market_pulse/earnings_calendar.py) | Finnhub earnings calendar and company profile APIs | Table image of next week's earnings, Monday to Friday | Every Friday |
+| [`market_close`](market_pulse/market_close.py) | Yahoo Finance daily closes | One image: S&P 500, Nasdaq, Dow, the 11 sectors, VIX, 10-year yield, dollar index, gold, oil, bitcoin | Weekdays after the US close |
+| [`ipo_calendar`](market_pulse/ipo_calendar.py) | Finnhub IPO calendar API | Table image of next week's expected US listings | Every Friday |
 | [`backfill`](market_pulse/backfill.py) | Wallstreetcn (all three channels) | Flash news missed during an outage window | Manual |
 
 The Wallstreetcn feed is Chinese, and Truth Social posts are translated into Chinese, so most of the Discord output is Chinese-language. Code, logs and documentation are in English.
@@ -56,6 +62,8 @@ market-pulse-discord/
 │   ├── news-trump.yml                        # Truth Social
 │   ├── feargreed.yml                         # Fear & Greed indices
 │   ├── news-earnings.yml                     # Weekly earnings calendar
+│   ├── ipo-calendar.yml                      # Weekly IPO calendar
+│   ├── market-close.yml                      # Daily US market close summary
 │   ├── backfill.yml                          # Manual backfill
 │   └── tests.yml                             # Unit tests on code changes
 ├── market_pulse/
@@ -64,6 +72,8 @@ market-pulse-discord/
 │   ├── truth_social.py
 │   ├── fear_greed.py
 │   ├── earnings_calendar.py
+│   ├── ipo_calendar.py
+│   ├── market_close.py
 │   ├── discord.py                            # Shared webhook client with bounded 429 retries
 │   └── paths.py                              # Repo-relative state/ and assets/ paths
 ├── scripts/
@@ -103,7 +113,9 @@ cron-job.org, every N minutes
   → workflow runs the tracker → posts to Discord → saves the state file to the state branch
 ```
 
-A side benefit is that changing the cadence, pausing or resuming a tracker needs no code change. Every workflow runs on `workflow_dispatch` alone, which also allows manual runs from the Actions page for debugging.
+A side benefit is that changing the cadence, pausing or resuming a tracker needs no code change. The frequent trackers run on `workflow_dispatch` alone, which also allows manual runs from the Actions page for debugging.
+
+The daily market close summary and the weekly IPO calendar are the exception: a delay of a few minutes does not matter for them, so they use GitHub's own `schedule` and need no scheduler setup. Pushing a change to either tracker also triggers a dry run that fetches and renders without posting.
 
 Because the scheduler addresses workflows by file name, **the workflow file names are part of the external interface** and should not be renamed without updating the scheduler.
 
@@ -167,6 +179,20 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 - Keeps only companies above a USD 10 billion market cap, looked up through Finnhub's company profile endpoint.
 - Groups by before-market-open (BMO) and after-market-close (AMC), sorts by market cap within each group, and renders the table with Plotly.
 
+### Market close
+
+- Runs at 21:30 UTC on weekdays, which is after the 4 pm New York close in both daylight and standard time.
+- All 20 symbols come from one request to Yahoo Finance's chart endpoint; each move is the last daily close against the one before it. The 10-year yield's move is shown in basis points.
+- Sectors are tracked through the Select Sector SPDR ETFs and sorted from best to worst.
+- Skips weekends and market holidays by checking that the newest S&P 500 bar belongs to today's session.
+- Stateless: nothing is written to the `state` branch.
+
+### IPO calendar
+
+- Runs alongside the earnings calendar and covers Monday to Friday of the following week.
+- Shows deals Finnhub marks as expected or priced; filed-only and withdrawn deals are left out.
+- Sorted by date, then by deal size, capped at 25 rows.
+
 ### Backfill
 
 - Shares parsing and posting code with the live tracker, so backfilled messages look identical.
@@ -208,6 +234,8 @@ git worktree add state state
 | `DISCORD_WEBHOOK_URL_TRUMP` | Truth Social channel |
 | `DISCORD_WEBHOOK_URL_FEARGREED` | Fear & Greed channel |
 | `DISCORD_WEBHOOK_URL_EARNINGS` | Earnings calendar channel |
+| `DISCORD_WEBHOOK_URL_MARKET` | Market close channel. Optional: falls back to the Fear & Greed channel |
+| `DISCORD_WEBHOOK_URL_IPO` | IPO calendar channel. Optional: falls back to the earnings calendar channel |
 | `DEEPL_API_KEY` | DeepL translation |
 | `FINNHUB_API_KEY` | Finnhub earnings and company data |
 

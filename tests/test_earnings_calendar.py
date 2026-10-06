@@ -2,7 +2,7 @@ import unittest
 from datetime import date, datetime, timezone
 from unittest import mock
 
-from discord_news import earnings_calendar as ec
+from market_pulse import earnings_calendar as ec
 
 MONDAY = date(2026, 10, 12)
 BILLION = 1_000_000_000

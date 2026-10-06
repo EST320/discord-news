@@ -1,7 +1,7 @@
 """Wallstreetcn live-news tracker: pushes new flash news for one channel to Discord.
 
 Usage:
-    python -m discord_news.wallstreetcn us    # or: a, hk
+    python -m market_pulse.wallstreetcn us    # or: a, hk
 """
 
 import json
@@ -15,8 +15,8 @@ from pathlib import Path
 
 import requests
 
-from discord_news.discord import post_webhook
-from discord_news.paths import STATE_DIR
+from market_pulse.discord import post_webhook
+from market_pulse.paths import STATE_DIR
 
 # Wallstreetcn's web frontend moved to the awtmt.com API domain. The old
 # api-prod.wallstreetcn.com has dropped packets from datacenter IPs (including
@@ -293,7 +293,7 @@ def run(channel):
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
     if len(args) != 1 or args[0] not in CHANNELS:
-        sys.exit(f"usage: python -m discord_news.wallstreetcn {{{'|'.join(CHANNELS)}}}")
+        sys.exit(f"usage: python -m market_pulse.wallstreetcn {{{'|'.join(CHANNELS)}}}")
     run(CHANNELS[args[0]])
 
 

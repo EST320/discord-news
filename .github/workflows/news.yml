@@ -34,7 +34,7 @@ jobs:
       - name: Fetch US-stock live news and post
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python -m discord_news.wallstreetcn us
+        run: python -m market_pulse.wallstreetcn us
 
       - name: Save state
         run: bash scripts/save_state.sh seen_us.json

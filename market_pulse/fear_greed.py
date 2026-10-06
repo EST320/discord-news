@@ -11,8 +11,8 @@ from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
 import requests
 
-from discord_news.discord import post_webhook
-from discord_news.paths import STATE_DIR
+from market_pulse.discord import post_webhook
+from market_pulse.paths import STATE_DIR
 
 # ============================================================
 # Config

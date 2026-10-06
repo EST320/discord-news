@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from discord_news import truth_social as ts
+from market_pulse import truth_social as ts
 
 
 def raw(post_id, content="hello", age_seconds=60, **extra):

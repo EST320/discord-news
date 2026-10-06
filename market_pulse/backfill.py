@@ -1,6 +1,6 @@
 """Backfill tool: re-send flash news from the last N hours that never reached Discord.
 
-It reuses the parsing and posting code of discord_news.wallstreetcn, so backfilled
+It reuses the parsing and posting code of market_pulse.wallstreetcn, so backfilled
 messages look identical to live ones. For each requested channel it:
   1. fetches every item published in the last N hours
   2. skips IDs already recorded in the channel's state file (no duplicates)
@@ -12,7 +12,7 @@ Environment variables:
     DRY_RUN    true = only list what would be sent (default false)
 
 Usage (local):
-    HOURS=6 CHANNELS=us,hk DRY_RUN=true python -m discord_news.backfill
+    HOURS=6 CHANNELS=us,hk DRY_RUN=true python -m market_pulse.backfill
 or trigger backfill.yml manually from the GitHub Actions page.
 """
 
@@ -20,7 +20,7 @@ import os
 import time
 from datetime import datetime, timezone
 
-from discord_news.wallstreetcn import (
+from market_pulse.wallstreetcn import (
     CHANNELS,
     DISCORD_DELAY_SECONDS,
     fetch_page,

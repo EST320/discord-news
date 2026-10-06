@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from discord_news import wallstreetcn as w
+from market_pulse import wallstreetcn as w
 
 US = w.CHANNELS["us"]
 

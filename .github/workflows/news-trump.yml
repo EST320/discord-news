@@ -36,7 +36,7 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL_TRUMP: ${{ secrets.DISCORD_WEBHOOK_URL_TRUMP }}
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
-        run: python -m discord_news.truth_social
+        run: python -m market_pulse.truth_social
 
       - name: Save state
         run: bash scripts/save_state.sh seen_trump.json

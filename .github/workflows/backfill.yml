@@ -55,7 +55,7 @@ jobs:
           HOURS: ${{ inputs.hours }}
           CHANNELS: ${{ inputs.channels }}
           DRY_RUN: ${{ inputs.dry_run }}
-        run: python -m discord_news.backfill
+        run: python -m market_pulse.backfill
 
       - name: Save state
         if: ${{ inputs.dry_run == false }}

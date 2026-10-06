@@ -14,8 +14,8 @@ import deepl
 import requests
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from discord_news.discord import post_webhook
-from discord_news.paths import ASSETS_DIR, STATE_DIR
+from market_pulse.discord import post_webhook
+from market_pulse.paths import ASSETS_DIR, STATE_DIR
 
 
 # ============================================================

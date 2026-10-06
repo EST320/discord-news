@@ -4,7 +4,7 @@ from unittest import mock
 
 import requests
 
-from discord_news import discord
+from market_pulse import discord
 
 
 class FakeResponse:

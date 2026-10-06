@@ -28,7 +28,7 @@ jobs:
         run: pip install -r requirements/fear_greed.txt
 
       - name: Run Fear and Greed tracker
-        run: python -m discord_news.fear_greed
+        run: python -m market_pulse.fear_greed
         env:
           DISCORD_WEBHOOK_URL_FEARGREED: ${{ secrets.DISCORD_WEBHOOK_URL_FEARGREED }}
 

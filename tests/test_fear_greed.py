@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from discord_news import fear_greed as fg
+from market_pulse import fear_greed as fg
 
 
 class RatingTest(unittest.TestCase):

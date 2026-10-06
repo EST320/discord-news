@@ -1,6 +1,6 @@
-# discord-news
+# market-pulse-discord
 
-[![Tests](https://github.com/EST320/discord-news/actions/workflows/tests.yml/badge.svg)](https://github.com/EST320/discord-news/actions/workflows/tests.yml)
+[![Tests](https://github.com/EST320/market-pulse-discord/actions/workflows/tests.yml/badge.svg)](https://github.com/EST320/market-pulse-discord/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Financial news and market-indicator trackers that run on GitHub Actions and post to Discord. Each tracker pulls incrementally from a public data source, deduplicates, filters, formats, and delivers through a Discord webhook.
@@ -19,11 +19,11 @@ In production since July 2026.
 
 | Tracker | Source | Posts | Cadence |
 |---|---|---|---|
-| [`wallstreetcn`](discord_news/wallstreetcn.py) | Wallstreetcn live feed: US, A-share and HK channels | Headline + body | Every 2 minutes per channel |
-| [`truth_social`](discord_news/truth_social.py) | CNN's public Truth Social archive | Chinese translation + card image of the original post | Every 5 minutes |
-| [`fear_greed`](discord_news/fear_greed.py) | CNN Fear & Greed Index, alternative.me Crypto Fear & Greed Index | Gauge chart, historical comparison, change since last run | Scheduled |
-| [`earnings_calendar`](discord_news/earnings_calendar.py) | Finnhub earnings calendar and company profile APIs | Table image of next week's earnings, Monday to Friday | Every Friday |
-| [`backfill`](discord_news/backfill.py) | Wallstreetcn (all three channels) | Flash news missed during an outage window | Manual |
+| [`wallstreetcn`](market_pulse/wallstreetcn.py) | Wallstreetcn live feed: US, A-share and HK channels | Headline + body | Every 2 minutes per channel |
+| [`truth_social`](market_pulse/truth_social.py) | CNN's public Truth Social archive | Chinese translation + card image of the original post | Every 5 minutes |
+| [`fear_greed`](market_pulse/fear_greed.py) | CNN Fear & Greed Index, alternative.me Crypto Fear & Greed Index | Gauge chart, historical comparison, change since last run | Scheduled |
+| [`earnings_calendar`](market_pulse/earnings_calendar.py) | Finnhub earnings calendar and company profile APIs | Table image of next week's earnings, Monday to Friday | Every Friday |
+| [`backfill`](market_pulse/backfill.py) | Wallstreetcn (all three channels) | Flash news missed during an outage window | Manual |
 
 The Wallstreetcn feed is Chinese, and Truth Social posts are translated into Chinese, so most of the Discord output is Chinese-language. Code, logs and documentation are in English.
 
@@ -50,7 +50,7 @@ flowchart LR
 ## Repository layout
 
 ```text
-discord-news/
+market-pulse-discord/
 ├── .github/workflows/
 │   ├── news.yml / news-a.yml / news-hk.yml   # Wallstreetcn US / A-share / HK
 │   ├── news-trump.yml                        # Truth Social
@@ -58,7 +58,7 @@ discord-news/
 │   ├── news-earnings.yml                     # Weekly earnings calendar
 │   ├── backfill.yml                          # Manual backfill
 │   └── tests.yml                             # Unit tests on code changes
-├── discord_news/
+├── market_pulse/
 │   ├── wallstreetcn.py                       # One module, three channels
 │   ├── backfill.py                           # Reuses wallstreetcn parsing and posting
 │   ├── truth_social.py
@@ -76,7 +76,7 @@ discord-news/
 └── tests/
 ```
 
-Every tracker is a module run with `python -m discord_news.<name>` from the repository root.
+Every tracker is a module run with `python -m market_pulse.<name>` from the repository root.
 
 ## Reliability
 
@@ -99,7 +99,7 @@ Flash news needs a steady poll roughly every 2 minutes. GitHub Actions' built-in
 
 ```text
 cron-job.org, every N minutes
-  → POST /repos/{owner}/discord-news/actions/workflows/{workflow}.yml/dispatches   body: {"ref": "main"}
+  → POST /repos/{owner}/market-pulse-discord/actions/workflows/{workflow}.yml/dispatches   body: {"ref": "main"}
   → workflow runs the tracker → posts to Discord → saves the state file to the state branch
 ```
 
@@ -119,7 +119,7 @@ Setup:
 
 ### State lives on a single-commit `state` branch
 
-Each workflow checks out `main` for the code and the [`state`](https://github.com/EST320/discord-news/tree/state) branch into `state/`, runs the tracker, then calls [`scripts/save_state.sh`](scripts/save_state.sh).
+Each workflow checks out `main` for the code and the [`state`](https://github.com/EST320/market-pulse-discord/tree/state) branch into `state/`, runs the tracker, then calls [`scripts/save_state.sh`](scripts/save_state.sh).
 
 - **Why git at all.** Zero cost and no database or extra service to run.
 - **Why a separate branch.** State used to be committed to `main`, where roughly 700 automated commits a day buried the code history. Keeping it on its own branch leaves `main` readable.
@@ -179,10 +179,10 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 pip install -r requirements.txt
 
 export DISCORD_WEBHOOK_URL="your_webhook_url"
-python -m discord_news.wallstreetcn us
+python -m market_pulse.wallstreetcn us
 
 # Backfill dry run: list US and HK items missed in the last 6 hours, send nothing
-HOURS=6 CHANNELS=us,hk DRY_RUN=true python -m discord_news.backfill
+HOURS=6 CHANNELS=us,hk DRY_RUN=true python -m market_pulse.backfill
 
 # Unit tests
 python -m unittest discover -s tests -v

@@ -34,7 +34,7 @@ jobs:
       - name: Fetch HK-stock live news and post
         env:
           DISCORD_WEBHOOK_URL_HK: ${{ secrets.DISCORD_WEBHOOK_URL_HK }}
-        run: python -m discord_news.wallstreetcn hk
+        run: python -m market_pulse.wallstreetcn hk
 
       - name: Save state
         run: bash scripts/save_state.sh seen_hk.json

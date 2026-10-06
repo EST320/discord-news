@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 import plotly.graph_objects as go
 
-from discord_news.discord import post_webhook
+from market_pulse.discord import post_webhook
 
 FINNHUB_KEY_ENV = "FINNHUB_API_KEY"
 WEBHOOK_ENV = "DISCORD_WEBHOOK_URL_EARNINGS"

@@ -1,7 +1,7 @@
 """Daily US market close summary for a Chinese-language channel.
 
-One image (index tiles with intraday sparklines, a sector heat map and macro
-tiles) plus a text recap, both in Chinese.
+One image in Chinese: index tiles with intraday sparklines, a sector heat map
+and macro tiles. The message text is just the session date.
 
 Usage:
     python -m market_pulse.market_close
@@ -216,12 +216,6 @@ def arrow(value):
     return {1: "▲", -1: "▼", 0: "—"}[direction(value)]
 
 
-def dot(value):
-    """Coloured marker for Discord text, where arrows cannot be tinted."""
-    up, down = ("🔴", "🟢") if RED_UP else ("🟢", "🔴")
-    return {1: up, -1: down, 0: "⚪"}[direction(value)]
-
-
 def format_pct(value):
     return f"{value:+.2f}%"
 
@@ -275,46 +269,16 @@ def build_headline(quotes):
 
 
 # ============================================================
-# Text recap (Discord embed)
+# Discord embed
 # ============================================================
 
 def build_embed(quotes, session_date, image_name):
-    index_lines = [
-        f"{dot(q['change_pct'])} **{name}**{'' if symbol.startswith('^') else f'（{ticker}）'}　"
-        f"{q['price']:,.2f}　{format_pct(q['change_pct'])}（{q['change']:+,.2f}）"
-        for symbol, name, ticker in INDICES
-        if (q := quotes.get(symbol))
-    ]
-
-    rows = sector_rows(quotes)
-    up, down = breadth(rows)
-    leaders = "、".join(f"{name} {format_pct(pct)}" for name, pct in rows[:3])
-    laggards = "、".join(f"{name} {format_pct(pct)}" for name, pct in rows[-3:][::-1])
-    sector_text = f"{up} 涨 {down} 跌\n最强：{leaders}\n最弱：{laggards}" if rows else "暂无数据"
-
-    macro_lines = []
-    for symbol, name, value_format, kind in MACRO:
-        quote = quotes.get(symbol)
-        if not quote:
-            continue
-        line = f"{dot(quote['change'])} **{name}**　{value_format.format(quote['price'])}　{format_macro_change(quote, kind)}"
-        if symbol == "^VIX":
-            line += f"（{vix_mood(quote['price'])}）"
-        macro_lines.append(line)
-
+    """The image carries all the numbers; the embed only captions it with the date."""
     sp500 = quotes.get("^GSPC")
     return {
         "title": f"美股收盘 · {format_date(session_date)}",
-        "description": build_headline(quotes) + "。",
         "color": int(change_color(sp500["change_pct"] if sp500 else 0).lstrip("#"), 16),
-        "fields": [
-            {"name": "指数", "value": "\n".join(index_lines) or "暂无数据", "inline": False},
-            {"name": "板块", "value": sector_text, "inline": False},
-            {"name": "利率 · 波动 · 商品 · 加密", "value": "\n".join(macro_lines) or "暂无数据", "inline": False},
-        ],
         "image": {"url": f"attachment://{image_name}"},
-        "footer": {"text": "涨跌幅相对上一交易日收盘 · 板块为 SPDR 行业 ETF · 数据来源 Yahoo Finance"},
-        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 

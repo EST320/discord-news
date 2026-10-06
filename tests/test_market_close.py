@@ -90,7 +90,6 @@ class FormattingTest(unittest.TestCase):
     def test_green_means_up(self):
         self.assertFalse(mc.RED_UP)
         self.assertEqual((mc.UP, mc.DOWN), (mc.GREEN, mc.RED))
-        self.assertEqual([mc.dot(v) for v in (1, -1, 0)], ["🟢", "🔴", "⚪"])
 
     def test_yield_moves_are_shown_in_basis_points(self):
         q = {"change": -0.042, "change_pct": -0.79}
@@ -134,31 +133,18 @@ class RecapTest(unittest.TestCase):
         self.assertEqual((rows[0][0], rows[-1][0]), ("公用事业", "医疗保健"))
         self.assertEqual(mc.breadth(rows), (9, 1))
 
-    def test_embed_is_complete_and_in_chinese(self):
-        quotes = sample_quotes(XLU=quote(103, 100), XLV=quote(99, 100), **{"^VIX": quote(15.01, 15.52)})
-        embed = mc.build_embed(quotes, date(2026, 10, 6), "market_close.png")
+    def test_embed_only_captions_the_image_with_the_date(self):
+        embed = mc.build_embed(sample_quotes(), date(2026, 10, 6), "market_close.png")
+        self.assertEqual(embed, {
+            "title": "美股收盘 · 2026年10月6日 周二",
+            "color": int(mc.UP.lstrip("#"), 16),
+            "image": {"url": "attachment://market_close.png"},
+        })
 
-        self.assertEqual(embed["title"], "美股收盘 · 2026年10月6日 周二")
-        self.assertEqual(embed["image"], {"url": "attachment://market_close.png"})
-        self.assertEqual(embed["color"], int(mc.UP.lstrip("#"), 16))
-
-        indices, sectors, macro = (field["value"] for field in embed["fields"])
-        for name in ("标普500", "纳斯达克", "道琼斯", "罗素2000", "半导体"):
-            self.assertIn(name, indices)
-        self.assertIn("10 涨 1 跌", sectors)
-        self.assertIn("最强：公用事业 +3.00%", sectors)
-        self.assertIn("最弱：医疗保健 -1.00%", sectors)
-        self.assertIn("🟢 **标普500**　101.00　+1.00%（+1.00）", indices)
-        self.assertIn("**罗素2000**（IWM）", indices)
-        self.assertIn("🔴 **VIX 恐慌指数**　15.01　-3.29%（波动正常）", macro)
-        self.assertIn("基点", macro)
-        for field in embed["fields"]:
-            self.assertLessEqual(len(field["value"]), 1024)
-
-    def test_embed_survives_missing_data(self):
-        embed = mc.build_embed({"^GSPC": quote(101, 100)}, date(2026, 10, 6), "x.png")
-        self.assertEqual(embed["fields"][1]["value"], "暂无数据")
-        self.assertEqual(embed["fields"][2]["value"], "暂无数据")
+    def test_embed_color_follows_the_sp500(self):
+        down = mc.build_embed(sample_quotes(**{"^GSPC": quote(99, 100)}), date(2026, 10, 6), "x.png")
+        self.assertEqual(down["color"], int(mc.DOWN.lstrip("#"), 16))
+        self.assertEqual(mc.build_embed({}, date(2026, 10, 6), "x.png")["color"], int(mc.FLAT.lstrip("#"), 16))
 
 
 if __name__ == "__main__":

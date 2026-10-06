@@ -1,7 +1,7 @@
 """Daily US market close summary for a Chinese-language channel.
 
 One image in Chinese: index tiles with intraday sparklines, a sector heat map
-and macro tiles. The message text is just the session date.
+and macro tiles with 52-week ranges. The message text is just the session date.
 
 Usage:
     python -m market_pulse.market_close
@@ -55,7 +55,6 @@ INDICES = [
     ("IWM", "罗素2000", "IWM"),
     ("SOXX", "半导体", "SOXX"),
 ]
-MAIN_INDICES = ("^GSPC", "^IXIC", "^DJI")
 
 # Sectors are tracked through the Select Sector SPDR ETFs.
 SECTORS = [
@@ -85,6 +84,7 @@ MACRO = [
 
 ALL_SYMBOLS = [row[0] for row in INDICES + SECTORS + MACRO]
 INTRADAY_SYMBOLS = [row[0] for row in INDICES]
+RANGE_SYMBOLS = [row[0] for row in MACRO]
 
 WEEKDAYS = "一二三四五六日"
 
@@ -179,6 +179,14 @@ def load_quotes():
     return {symbol: quote for symbol, quote in quotes.items() if quote}
 
 
+def parse_range(entry):
+    """(low, high) of a year of daily closes, or None if unusable."""
+    if not isinstance(entry, dict):
+        return None
+    closes = [c for c in entry.get("close") or [] if isinstance(c, (int, float))]
+    return (min(closes), max(closes)) if len(closes) >= 20 else None
+
+
 def load_intraday():
     """Sparklines are decoration: a failure here must not block the summary."""
     try:
@@ -187,6 +195,17 @@ def load_intraday():
         print(f"Intraday fetch failed, drawing tiles without sparklines: {exc!r}")
         return {}
     return {symbol: parse_intraday(payload.get(symbol)) for symbol in INTRADAY_SYMBOLS}
+
+
+def load_ranges():
+    """52-week ranges for the macro tiles. Decoration too: never blocks the summary."""
+    try:
+        payload = fetch_spark(RANGE_SYMBOLS, "1y", "1d")
+    except Exception as exc:
+        print(f"52-week range fetch failed, drawing macro tiles without ranges: {exc!r}")
+        return {}
+    ranges = {symbol: parse_range(payload.get(symbol)) for symbol in RANGE_SYMBOLS}
+    return {symbol: value for symbol, value in ranges.items() if value}
 
 
 def market_traded_today(quotes, now=None):
@@ -230,16 +249,6 @@ def format_date(session_date):
     return f"{session_date.year}年{session_date.month}月{session_date.day}日 周{WEEKDAYS[session_date.weekday()]}"
 
 
-def vix_mood(level):
-    if level < 15:
-        return "市场平静"
-    if level < 20:
-        return "波动正常"
-    if level < 30:
-        return "情绪紧张"
-    return "市场恐慌"
-
-
 def sector_rows(quotes):
     """(name, pct) for every sector with data, best first."""
     rows = [(name, quotes[symbol]["change_pct"]) for symbol, name in SECTORS if symbol in quotes]
@@ -250,22 +259,6 @@ def breadth(rows):
     up = sum(1 for _, pct in rows if direction(pct) > 0)
     down = sum(1 for _, pct in rows if direction(pct) < 0)
     return up, down
-
-
-def build_headline(quotes):
-    """One sentence on how the three main indices closed."""
-    moves = [direction(quotes[s]["change_pct"]) for s in MAIN_INDICES if s in quotes]
-    if not moves:
-        return "美股收盘"
-    if all(m > 0 for m in moves):
-        tone = "三大指数集体收涨"
-    elif all(m < 0 for m in moves):
-        tone = "三大指数集体收跌"
-    else:
-        tone = "三大指数涨跌不一"
-
-    sp500 = quotes.get("^GSPC")
-    return f"{tone}，标普500 {format_pct(sp500['change_pct'])}" if sp500 else tone
 
 
 # ============================================================
@@ -378,26 +371,39 @@ def draw_breadth_tile(fig, font, rect, rows):
     ax.add_patch(mpatches.Rectangle((0.92 - 0.84 * down / total, 0.10), 0.84 * down / total, 0.10, color=DOWN))
 
 
-def draw_macro_tile(fig, font, rect, name, value_format, kind, quote, note=None):
+def draw_range(ax, font, value_format, price, low, high):
+    """52-week low and high with a marker for where the latest close sits between them."""
+    low, high = min(low, price), max(high, price)
+    bar_left, bar_right, bar_y = 0.10, 0.90, 0.265
+    position = (price - low) / (high - low) if high > low else 0.5
+
+    ax.plot([bar_left, bar_right], [bar_y, bar_y], color=RULE, linewidth=3.5, solid_capstyle="round")
+    ax.plot([bar_left + (bar_right - bar_left) * position], [bar_y], marker="o", markersize=7,
+            color=TEXT, markeredgecolor=PANEL, markeredgewidth=1.2)
+
+    # Two dollar signs in one string would switch Matplotlib into math mode.
+    label = f"52周  {value_format.format(low)} – {value_format.format(high)}".replace("$", r"\$")
+    ax.text(0.5, 0.135, label, fontproperties=font(9.5), color=MUTED, ha="center", va="center")
+
+
+def draw_macro_tile(fig, font, rect, name, value_format, kind, quote, year_range=None):
     ax = tile(fig, rect)
-    ax.text(0.5, 0.84, name, fontproperties=font(11.5), color=MUTED, ha="center", va="center")
+    ax.text(0.5, 0.88, name, fontproperties=font(11.5), color=MUTED, ha="center", va="center")
     if not quote:
-        ax.text(0.5, 0.45, "暂无数据", fontproperties=font(12), color=MUTED, ha="center", va="center")
+        ax.text(0.5, 0.50, "暂无数据", fontproperties=font(12), color=MUTED, ha="center", va="center")
         return
     color = change_color(quote["change"])
-    ax.text(0.5, 0.56, value_format.format(quote["price"]), fontproperties=font(19, bold=True),
+    ax.text(0.5, 0.66, value_format.format(quote["price"]), fontproperties=font(19, bold=True),
             color=TEXT, ha="center", va="center")
-    ax.text(0.5, 0.30, f"{arrow(quote['change'])} {format_macro_change(quote, kind)}",
+    ax.text(0.5, 0.445, f"{arrow(quote['change'])} {format_macro_change(quote, kind)}",
             fontproperties=font(12.5, bold=True), color=color, ha="center", va="center")
-    if note:
-        ax.text(0.5, 0.11, note, fontproperties=font(9.5), color=MUTED, ha="center", va="center")
+    if year_range:
+        draw_range(ax, font, value_format, quote["price"], *year_range)
     ax.add_patch(mpatches.Rectangle((0, 0), 1, 0.03, color=color))
 
 
-def section_title(fig, font, y, title, note=""):
+def section_title(fig, font, y, title):
     fig.text(0.03, y, title, fontproperties=font(15, bold=True), color=TEXT, ha="left", va="center")
-    if note:
-        fig.text(0.97, y, note, fontproperties=font(10.5), color=MUTED, ha="right", va="center")
 
 
 def grid(left, right, columns, gap):
@@ -405,7 +411,7 @@ def grid(left, right, columns, gap):
     return [left + i * (width + gap) for i in range(columns)], width
 
 
-def draw_card(quotes, intraday, session_date, out_path=OUTPUT_FILE):
+def draw_card(quotes, intraday, ranges, session_date, out_path=OUTPUT_FILE):
     font = Fonts()
     fig = plt.figure(figsize=(12, 10.4))
     fig.patch.set_facecolor(BG)
@@ -413,8 +419,7 @@ def draw_card(quotes, intraday, session_date, out_path=OUTPUT_FILE):
 
     # Header
     fig.text(left, 0.957, "美股收盘", fontproperties=font(26, bold=True), color=TEXT, ha="left", va="center")
-    fig.text(right, 0.965, format_date(session_date), fontproperties=font(14), color=MUTED, ha="right", va="center")
-    fig.text(right, 0.937, build_headline(quotes), fontproperties=font(12), color=MUTED, ha="right", va="center")
+    fig.text(right, 0.957, format_date(session_date), fontproperties=font(14), color=MUTED, ha="right", va="center")
 
     # Indices: one tile each, with the session's intraday path
     xs, width = grid(left, right, len(INDICES), gap)
@@ -424,7 +429,7 @@ def draw_card(quotes, intraday, session_date, out_path=OUTPUT_FILE):
 
     # Sectors: heat map, best to worst in reading order
     rows = sector_rows(quotes)
-    section_title(fig, font, 0.640, "板块表现", "由强到弱 · 颜色越深涨跌幅越大")
+    section_title(fig, font, 0.640, "板块表现")
     xs, width = grid(left, right, 6, gap)
     tile_height, top = 0.135, 0.612
     cells = [(xs[i % 6], top - tile_height - (i // 6) * (tile_height + gap * 1.2)) for i in range(12)]
@@ -436,12 +441,9 @@ def draw_card(quotes, intraday, session_date, out_path=OUTPUT_FILE):
     section_title(fig, font, 0.288, "利率 · 波动 · 商品 · 加密")
     xs, width = grid(left, right, len(MACRO), gap)
     for x, (symbol, name, value_format, kind) in zip(xs, MACRO):
-        quote = quotes.get(symbol)
-        note = vix_mood(quote["price"]) if quote and symbol == "^VIX" else None
-        draw_macro_tile(fig, font, [x, 0.065, width, 0.195], name, value_format, kind, quote, note)
+        draw_macro_tile(fig, font, [x, 0.065, width, 0.195], name, value_format, kind,
+                        quotes.get(symbol), ranges.get(symbol))
 
-    legend = "红涨绿跌" if RED_UP else "绿涨红跌"
-    fig.text(left, 0.028, f"{legend} · 虚线为上一交易日收盘", fontproperties=font(10), color=MUTED, ha="left", va="center")
     fig.text(right, 0.028, "涨跌幅相对上一交易日收盘 · 板块为 SPDR 行业 ETF · 数据来源 Yahoo Finance",
              fontproperties=font(10), color=MUTED, ha="right", va="center")
 
@@ -471,7 +473,7 @@ def main():
             return
 
     session_date = datetime.fromtimestamp(quotes["^GSPC"]["bar_ts"], tz=timezone.utc).date()
-    chart_path = draw_card(quotes, load_intraday(), session_date)
+    chart_path = draw_card(quotes, load_intraday(), load_ranges(), session_date)
     embed = build_embed(quotes, session_date, chart_path.name)
 
     if DRY_RUN:

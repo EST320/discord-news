@@ -186,7 +186,7 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 - Written for a Chinese-language channel: the image is labelled in Chinese and the message text is just the session date. Colours follow the US convention of green for up and red for down (`RED_UP` in the module flips it to the mainland Chinese convention). Every number also carries an arrow and a sign.
 - Five index tiles (S&P 500, Nasdaq, Dow, plus IWM for small caps and SOXX for semiconductors) show the move, the close and the session's intraday path against the previous close.
 - Sectors are tracked through the Select Sector SPDR ETFs and drawn as a heat map, strongest first, with colour depth proportional to the move.
-- A row of macro tiles covers the VIX (with a plain-language reading), the 10-year yield (move in basis points), the dollar index, gold, oil and bitcoin.
+- A row of macro tiles covers the VIX, the 10-year yield (move in basis points), the dollar index, gold, oil and bitcoin. Each tile also shows the 52-week low and high of its daily closes, with a marker for where the latest close sits between them.
 - Daily closes for all 22 symbols come from Yahoo Finance's chart endpoint in batches of 10; each move is the last daily close against the one before it.
 - The workflow installs `fonts-noto-cjk` for the Chinese labels; locally, Microsoft YaHei or PingFang is used.
 - Skips weekends and market holidays by checking that the newest S&P 500 bar belongs to today's session.

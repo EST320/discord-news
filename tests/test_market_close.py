@@ -45,6 +45,12 @@ class ParseQuoteTest(unittest.TestCase):
         self.assertEqual(mc.parse_intraday({"close": [1, 2]}), [])
         self.assertEqual(mc.parse_intraday(None), [])
 
+    def test_range_is_the_low_and_high_close(self):
+        closes = [None, 5.0] + [10.0] * 30 + [42.5, 7.0]
+        self.assertEqual(mc.parse_range({"close": closes}), (5.0, 42.5))
+        self.assertIsNone(mc.parse_range({"close": [1, 2, 3]}))
+        self.assertIsNone(mc.parse_range(None))
+
 
 class FetchSparkTest(unittest.TestCase):
     def test_symbols_are_requested_in_batches_and_merged(self):
@@ -61,10 +67,21 @@ class FetchSparkTest(unittest.TestCase):
         self.assertTrue(all(size <= mc.SPARK_BATCH_SIZE for size in batch_sizes))
         self.assertEqual(sum(batch_sizes), len(mc.ALL_SYMBOLS))
 
-    def test_intraday_failure_does_not_block_the_summary(self):
+    def test_decoration_fetch_failures_do_not_block_the_summary(self):
         with mock.patch.object(mc, "fetch_spark", side_effect=RuntimeError("down")), \
                 mock.patch("builtins.print"):
             self.assertEqual(mc.load_intraday(), {})
+            self.assertEqual(mc.load_ranges(), {})
+
+    def test_ranges_cover_the_macro_symbols_and_skip_thin_data(self):
+        year = {"close": [10 + i % 7 for i in range(250)]}
+        payload = {symbol: year for symbol in mc.RANGE_SYMBOLS}
+        payload["BTC-USD"] = {"close": [1, 2, 3]}
+        with mock.patch.object(mc, "fetch_spark", return_value=payload) as fetch:
+            ranges = mc.load_ranges()
+        fetch.assert_called_once_with(mc.RANGE_SYMBOLS, "1y", "1d")
+        self.assertEqual(ranges["^VIX"], (10, 16))
+        self.assertNotIn("BTC-USD", ranges)
 
 
 class MarketTradedTodayTest(unittest.TestCase):
@@ -100,10 +117,6 @@ class FormattingTest(unittest.TestCase):
         self.assertEqual(mc.format_date(date(2026, 10, 6)), "2026年10月6日 周二")
         self.assertEqual(mc.format_date(date(2026, 10, 11)), "2026年10月11日 周日")
 
-    def test_vix_mood_bands(self):
-        self.assertEqual([mc.vix_mood(v) for v in (12, 15, 19.9, 20, 29.9, 30, 55)],
-                         ["市场平静", "波动正常", "波动正常", "情绪紧张", "情绪紧张", "市场恐慌", "市场恐慌"])
-
     def test_heat_grows_with_the_move_and_saturates(self):
         self.assertEqual(mc.heat_color(0, 2), mc.PANEL)
         small, big, huge = (mc.heat_color(pct, 2) for pct in (0.2, 2, 9))
@@ -114,19 +127,10 @@ class FormattingTest(unittest.TestCase):
         self.assertEqual(len(mc.ALL_SYMBOLS), len(set(mc.ALL_SYMBOLS)))
         self.assertEqual(len(mc.ALL_SYMBOLS), 22)
         self.assertEqual(mc.INTRADAY_SYMBOLS, ["^GSPC", "^IXIC", "^DJI", "IWM", "SOXX"])
+        self.assertEqual(mc.RANGE_SYMBOLS, ["^VIX", "^TNX", "DX-Y.NYB", "GC=F", "CL=F", "BTC-USD"])
 
 
 class RecapTest(unittest.TestCase):
-    def test_headline_tone(self):
-        down = quote(99, 100)
-        self.assertEqual(mc.build_headline(sample_quotes()), "三大指数集体收涨，标普500 +1.00%")
-        self.assertEqual(
-            mc.build_headline(sample_quotes(**{"^GSPC": down, "^IXIC": down, "^DJI": down})),
-            "三大指数集体收跌，标普500 -1.00%",
-        )
-        self.assertEqual(mc.build_headline(sample_quotes(**{"^DJI": down})), "三大指数涨跌不一，标普500 +1.00%")
-        self.assertEqual(mc.build_headline({}), "美股收盘")
-
     def test_sectors_sorted_and_counted(self):
         quotes = sample_quotes(XLU=quote(103, 100), XLV=quote(99, 100), XLE=quote(100, 100))
         rows = mc.sector_rows(quotes)

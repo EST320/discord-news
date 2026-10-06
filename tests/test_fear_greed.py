@@ -65,8 +65,8 @@ def panel(key, heading, value, commentary):
             "value": value, "commentary": commentary, "history": [("Now", value)] * 4}
 
 
-CNN = panel("cnn_last", "CNN Market Sentiment Tracker", 43.23, "Fear (43.2) (-0.6).")
-CRYPTO = panel("crypto_last", "Crypto Market Sentiment Tracker", 70.0, "Greed (70.0) (+5.0).")
+CNN = panel("cnn_last", "CNN Market Sentiment", 43.23, "Fear (43.2) (-0.6).")
+CRYPTO = panel("crypto_last", "Crypto Market Sentiment", 70.0, "Greed (70.0) (+5.0).")
 MISSING = {"title": "Crypto Market", "source": "alternative.me", "value": None}
 
 
@@ -75,16 +75,25 @@ class EmbedTest(unittest.TestCase):
         embed = fg.build_embed([CNN, CRYPTO], "fear_greed.png")
         self.assertEqual(embed["image"], {"url": "attachment://fear_greed.png"})
         self.assertEqual(embed["fields"], [
-            {"name": "CNN Market Sentiment Tracker",
+            {"name": "CNN Market Sentiment",
              "value": "Fear (43.2) (-0.6).\n**Current Value**\n43.23", "inline": True},
-            {"name": "Crypto Market Sentiment Tracker",
+            {"name": "Crypto Market Sentiment",
              "value": "Greed (70.0) (+5.0).\n**Current Value**\n70.00", "inline": True},
         ])
         self.assertEqual(embed["color"], int(fg.rating_color(43.23).lstrip("#"), 16))
 
+    def test_headings_are_short_enough_to_stay_on_one_line(self):
+        # "CNN Market Sentiment Tracker" (28 characters) was the longest that fit.
+        cnn = mock.patch.object(fg, "fetch_cnn_data", return_value={"fear_and_greed": {"score": 50}})
+        crypto = mock.patch.object(fg, "fetch_crypto_data", return_value=[{"value": "50"}, {"value": "50"}])
+        with cnn, crypto:
+            headings = [fg.load_cnn({})["heading"], fg.load_crypto({})["heading"]]
+        self.assertEqual(headings, ["CNN Market Sentiment", "Crypto Market Sentiment"])
+        self.assertTrue(all(len(heading) <= 24 for heading in headings))
+
     def test_an_index_without_data_is_left_out_of_the_text(self):
         embed = fg.build_embed([CNN, MISSING], "x.png")
-        self.assertEqual([field["name"] for field in embed["fields"]], ["CNN Market Sentiment Tracker"])
+        self.assertEqual([field["name"] for field in embed["fields"]], ["CNN Market Sentiment"])
 
 
 class MainTest(unittest.TestCase):

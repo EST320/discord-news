@@ -172,7 +172,9 @@ def load_cnn(state):
     score = float(data.get("fear_and_greed", {}).get("score", 0))
     return {
         "key": "cnn_last",
-        "heading": "CNN Market Sentiment Tracker",
+        # Kept short: side-by-side embed fields are narrow, and a longer
+        # heading wraps onto a second line and knocks the two columns out of line.
+        "heading": "CNN Market Sentiment",
         "title": "Stock Market",
         "source": "CNN Business",
         "value": score,
@@ -224,7 +226,7 @@ def load_crypto(state):
     prev_value = float(entries[1]["value"]) if len(entries) > 1 else None
     return {
         "key": "crypto_last",
-        "heading": "Crypto Market Sentiment Tracker",
+        "heading": "Crypto Market Sentiment",
         "title": "Crypto Market",
         "source": "alternative.me",
         "value": current_value,
@@ -239,8 +241,8 @@ def load_crypto(state):
 
 def draw_gauge(fig, font, rect, value):
     ax = fig.add_axes(rect)
-    ax.set_xlim(-1.32, 1.32)
-    ax.set_ylim(-0.62, 1.22)
+    ax.set_xlim(-1.40, 1.40)
+    ax.set_ylim(-0.62, 1.33)
     ax.set_aspect("equal")
     ax.axis("off")
 
@@ -251,10 +253,17 @@ def draw_gauge(fig, font, rect, value):
         ax.add_patch(mpatches.Wedge((0, 0), r_outer, 180 - t1 * 180, 180 - t0 * 180, width=width,
                                     facecolor=cmap(t0), edgecolor="none"))
 
-    for tick in (0, 25, 50, 75, 100):
+    # Scale: a tick every 5 points just outside the arc, longer and labelled every 25.
+    for tick in range(0, 101, 5):
         angle = np.radians(180 - tick / 100 * 180)
-        ax.text(1.16 * np.cos(angle), 1.16 * np.sin(angle), str(tick), fontproperties=font(10),
-                color=MUTED, ha="center", va="center")
+        cos, sin = np.cos(angle), np.sin(angle)
+        major = tick % 25 == 0
+        r0, r1 = 1.035, (1.105 if major else 1.07)
+        ax.plot([r0 * cos, r1 * cos], [r0 * sin, r1 * sin], color=TEXT if major else MUTED,
+                linewidth=1.8 if major else 1.0, solid_capstyle="butt")
+        if major:
+            ax.text(1.23 * cos, 1.23 * sin, str(tick), fontproperties=font(10),
+                    color=MUTED, ha="center", va="center")
 
     angle = np.radians(180 - max(0, min(value, 100)) / 100 * 180)
     ax.plot([0, 0.70 * np.cos(angle)], [0, 0.70 * np.sin(angle)], color=TEXT, linewidth=4.5,
@@ -367,10 +376,10 @@ def load_panels(state):
 
 def sample_panels():
     return [
-        {"key": "cnn_last", "heading": "CNN Market Sentiment Tracker (Test)", "title": "Stock Market",
+        {"key": "cnn_last", "heading": "CNN Market Sentiment (Test)", "title": "Stock Market",
          "source": "CNN Business", "value": 37.51, "commentary": "This is a test message.",
          "history": [("Now", 37.51), ("Yesterday", 38.6), ("Last week", 41.2), ("Last month", 35.0)]},
-        {"key": "crypto_last", "heading": "Crypto Market Sentiment Tracker (Test)", "title": "Crypto Market",
+        {"key": "crypto_last", "heading": "Crypto Market Sentiment (Test)", "title": "Crypto Market",
          "source": "alternative.me", "value": 70.0, "commentary": "This is a test message.",
          "history": [("Now", 70.0), ("Yesterday", 65.0), ("Last week", 74.0), ("Last month", 73.0)]},
     ]

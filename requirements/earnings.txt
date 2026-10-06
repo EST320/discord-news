@@ -1,4 +1,2 @@
 -r base.txt
-plotly==7.1.0
-# Required by plotly's fig.write_image() to export the PNG.
-kaleido==1.4.0
+matplotlib==3.11.2

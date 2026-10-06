@@ -8,6 +8,9 @@ on:
     branches: [main]
     paths:
       - "market_pulse/ipo_calendar.py"
+      - "market_pulse/earnings_calendar.py"
+      - "market_pulse/theme.py"
+      - "market_pulse/fonts.py"
       - "requirements/earnings.txt"
       - ".github/workflows/ipo-calendar.yml"
 
@@ -27,14 +30,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Same table-rendering stack as the earnings calendar (plotly + kaleido).
+      # The chart shares the market close image's typeface, which needs a CJK font.
+      - name: Install chart font
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
+
       - name: Install dependencies
         run: pip install -r requirements/earnings.txt
 
       - name: Fetch and post IPO calendar
         env:
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-          # Falls back to the earnings calendar channel until a dedicated webhook is set.
+          # Shares the earnings calendar channel unless a dedicated webhook is set.
           DISCORD_WEBHOOK_URL_IPO: ${{ secrets.DISCORD_WEBHOOK_URL_IPO || secrets.DISCORD_WEBHOOK_URL_EARNINGS }}
           DRY_RUN: ${{ github.event_name == 'push' }}
         run: python -m market_pulse.ipo_calendar

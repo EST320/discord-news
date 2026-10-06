@@ -63,12 +63,32 @@ class GroupByDayTest(unittest.TestCase):
         self.assertEqual(len(grouped["Fri"]), ec.MAX_COMPANIES_PER_DAY)
 
 
-class FormatCellTest(unittest.TestCase):
-    def test_cell_markup(self):
-        item = {"ticker": "$PEP", "name": "PepsiCo Inc", "hour": "bmo"}
-        self.assertEqual(ec.format_cell(item), f"<b>$PEP</b> {ec.ICON_MAP['bmo']}<br>PepsiCo Inc")
-        self.assertEqual(ec.format_cell({"ticker": "$X", "name": "X", "hour": ""}), "<b>$X</b><br>X")
-        self.assertEqual(ec.format_cell(None), "")
+class LayoutTest(unittest.TestCase):
+    def item(self, ticker, hour, cap=20 * BILLION):
+        return {"ticker": ticker, "name": ticker, "hour": hour, "market_cap": cap}
+
+    def test_market_cap_labels(self):
+        self.assertEqual(ec.format_market_cap(245 * BILLION), "$245B")
+        self.assertEqual(ec.format_market_cap(1200 * BILLION), "$1.2T")
+        self.assertEqual(ec.format_market_cap(ec.MIN_MARKET_CAP), "$10B")
+
+    def test_sessions_keep_display_order_and_drop_empty_ones(self):
+        items = [self.item("$A", "amc"), self.item("$B", "bmo"), self.item("$C", "dmh"), self.item("$D", "bmo")]
+        sessions = ec.split_sessions(items)
+        self.assertEqual([key for key, _ in sessions], ["bmo", "amc", ""])
+        self.assertEqual([[i["ticker"] for i in group] for _, group in sessions], [["$B", "$D"], ["$A"], ["$C"]])
+        self.assertEqual(ec.split_sessions([self.item("$A", "amc")]), [("amc", [self.item("$A", "amc")])])
+
+    def test_column_height_grows_with_reports(self):
+        empty = ec.day_content_height([])
+        one = ec.day_content_height([self.item("$A", "bmo")])
+        two_sessions = ec.day_content_height([self.item("$A", "bmo"), self.item("$B", "amc")])
+        self.assertEqual(empty, ec.ROW_HEIGHT)
+        self.assertAlmostEqual(one, ec.SESSION_HEIGHT + ec.ROW_HEIGHT)
+        self.assertAlmostEqual(two_sessions, 2 * (ec.SESSION_HEIGHT + ec.ROW_HEIGHT))
+
+    def test_nothing_is_drawn_for_an_empty_week(self):
+        self.assertFalse(ec.draw_card({day: [] for day in ec.DAY_LABELS}, MONDAY))
 
 
 if __name__ == "__main__":

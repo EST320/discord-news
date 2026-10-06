@@ -33,8 +33,7 @@ class FormattingTest(unittest.TestCase):
         self.assertEqual(ic.format_price(12.5), "$12.50")
         self.assertEqual(ic.format_price(None), "-")
 
-    def test_price_cell_never_holds_two_dollar_signs(self):
-        # Plotly would render the text between them as LaTeX.
+    def test_price_range_has_one_dollar_sign(self):
         self.assertEqual(ic.format_price("4.00-6.00").count("$"), 1)
 
 
@@ -102,21 +101,23 @@ class SelectListingsTest(unittest.TestCase):
         self.assertEqual(listing["name"], "Acme Robotics Inc")
 
 
-class BuildRowsTest(unittest.TestCase):
-    def test_date_is_printed_once_per_day_and_gaps_become_dashes(self):
-        listings = ic.select_listings(
-            [
-                entry(13, "BIG", 500, price="18.00-21.00", numberOfShares=25_000_000, exchange="NYSE"),
-                entry(13, "SMALL", 10),
-                entry(15, "THU", 5),
-            ],
-            MONDAY, FRIDAY,
+class LayoutTest(unittest.TestCase):
+    def listings(self):
+        return ic.select_listings(
+            [entry(13, "BIG", 500), entry(13, "SMALL", 10), entry(15, "THU", 5)], MONDAY, FRIDAY
         )
-        rows = ic.build_rows(listings)
-        self.assertEqual([row[0] for row in rows], ["<b>Tue Oct 13</b>", "", "<b>Thu Oct 15</b>"])
-        self.assertEqual(rows[0][1:], ("<b>$BIG</b>", "BIG Corp", "NYSE", "$18.00 - 21.00", "25.0M", "$500"))
-        self.assertEqual(rows[1][3:], ("-", "-", "-", "$10"))
-        self.assertEqual(len(rows[0]), len(ic.COLUMNS))
+
+    def test_listings_are_grouped_under_their_date(self):
+        groups = ic.group_by_date(self.listings())
+        self.assertEqual([day for day, _ in groups], [date(2026, 10, 13), date(2026, 10, 15)])
+        self.assertEqual([[i["symbol"] for i in items] for _, items in groups], [["BIG", "SMALL"], ["THU"]])
+        self.assertEqual(ic.group_by_date([]), [])
+
+    def test_card_height_grows_with_days_and_rows(self):
+        one_day = ic.group_by_date(self.listings()[:2])
+        two_days = ic.group_by_date(self.listings())
+        extra = ic.card_height(two_days) - ic.card_height(one_day)
+        self.assertAlmostEqual(extra, ic.DAY_HEIGHT + ic.ROW_HEIGHT + ic.ROW_GAP)
 
 
 if __name__ == "__main__":

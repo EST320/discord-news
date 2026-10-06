@@ -2,6 +2,15 @@ name: Weekly Earnings Calendar to Discord
 
 on:
   workflow_dispatch:
+  # A change to the tracker triggers a dry run: fetch and render, post nothing.
+  push:
+    branches: [main]
+    paths:
+      - "market_pulse/earnings_calendar.py"
+      - "market_pulse/theme.py"
+      - "market_pulse/fonts.py"
+      - "requirements/earnings.txt"
+      - ".github/workflows/news-earnings.yml"
 
 permissions:
   contents: read
@@ -18,6 +27,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The chart shares the market close image's typeface, which needs a CJK font.
+      - name: Install chart font
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
+
       - name: Install dependencies
         run: pip install -r requirements/earnings.txt
 
@@ -25,4 +38,5 @@ jobs:
         env:
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           DISCORD_WEBHOOK_URL_EARNINGS: ${{ secrets.DISCORD_WEBHOOK_URL_EARNINGS }}
+          DRY_RUN: ${{ github.event_name == 'push' }}
         run: python -m market_pulse.earnings_calendar

@@ -1,24 +1,51 @@
+"""Weekly earnings calendar: one image with next week's reports, a column per day.
+
+Usage:
+    python -m market_pulse.earnings_calendar
+
+Set DRY_RUN=true to fetch and render without posting.
+"""
+
 import os
 import time
 from datetime import datetime, timedelta, timezone
 
 import requests
-import plotly.graph_objects as go
 
 from market_pulse.discord import post_webhook
+from market_pulse.theme import AMBER, INDIGO, MUTED, RULE, Fonts, box, canvas, label, save
 
 FINNHUB_KEY_ENV = "FINNHUB_API_KEY"
 WEBHOOK_ENV = "DISCORD_WEBHOOK_URL_EARNINGS"
+DRY_RUN = os.environ.get("DRY_RUN", "false").lower() in ("1", "true", "yes")
+
 FINNHUB_URL = "https://finnhub.io/api/v1/calendar/earnings"
 PROFILE_URL = "https://finnhub.io/api/v1/stock/profile2"
 OUTPUT_FILE = "earnings_calendar.png"
 
 DAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri")
 TIME_ORDER = {"bmo": 0, "amc": 1, "": 2}
-ICON_MAP = {"bmo": "☀️", "amc": "🌙"}
 MIN_MARKET_CAP = 10_000_000_000
 MAX_COMPANIES_PER_DAY = 15
 PROFILE_REQUEST_DELAY = 1.1
+
+# Reporting session -> (heading, accent colour), in display order.
+SESSIONS = {
+    "bmo": ("Before Open", AMBER),
+    "amc": ("After Close", INDIGO),
+    "": ("Time TBD", MUTED),
+}
+
+# Card layout, in inches.
+CARD_WIDTH = 12.0
+MARGIN = 0.36
+COLUMN_GAP = 0.12
+TOP = 0.74                 # where the day columns start
+DAY_HEADER_HEIGHT = 0.66
+SESSION_HEIGHT = 0.40
+ROW_HEIGHT = 0.56
+COLUMN_PADDING = 0.14
+FOOTER_HEIGHT = 0.50
 
 
 def get_next_week_range(today=None):
@@ -109,59 +136,92 @@ def group_by_day(entries, monday):
     return grouped
 
 
-def format_cell(item):
-    if not item:
-        return ""
-    icon = ICON_MAP.get(item["hour"], "")
-    label = f"<b>{item['ticker']}</b>"
-    if icon:
-        label += f" {icon}"
-    return f"{label}<br>{item['name']}"
+# ============================================================
+# Chart
+# ============================================================
+
+def format_market_cap(value):
+    """245_000_000_000 -> '$245B'; 1_200_000_000_000 -> '$1.2T'."""
+    if value >= 1e12:
+        return f"${value / 1e12:.1f}T"
+    return f"${value / 1e9:.0f}B"
 
 
-def build_chart(grouped, monday):
-    max_rows = max((len(v) for v in grouped.values()), default=0)
-    if max_rows == 0:
+def split_sessions(day_items):
+    """[(session key, items)] for the sessions that have reports, in display order."""
+    sessions = []
+    for key in SESSIONS:
+        items = [item for item in day_items if (item["hour"] if item["hour"] in SESSIONS else "") == key]
+        if items:
+            sessions.append((key, items))
+    return sessions
+
+
+def day_content_height(day_items):
+    sessions = split_sessions(day_items)
+    if not sessions:
+        return ROW_HEIGHT
+    return sum(SESSION_HEIGHT + len(items) * ROW_HEIGHT for _, items in sessions)
+
+
+def draw_day(ax, font, x, width, height, day, date, day_items):
+    box(ax, x, TOP, width, height)
+    inner_left, inner_right = x + 0.16, x + width - 0.16
+
+    label(ax, inner_left, TOP + 0.33, day, font(15, bold=True))
+    label(ax, inner_right, TOP + 0.33, date.strftime("%b %d"), font(11), MUTED, ha="right")
+    ax.plot([inner_left, inner_right], [TOP + DAY_HEADER_HEIGHT - 0.04] * 2, color=RULE, linewidth=1)
+
+    y = TOP + DAY_HEADER_HEIGHT
+    sessions = split_sessions(day_items)
+    if not sessions:
+        label(ax, x + width / 2, y + ROW_HEIGHT / 2, "No reports", font(11), MUTED, ha="center")
+        return
+
+    for key, items in sessions:
+        heading, accent = SESSIONS[key]
+        box(ax, inner_left, y + 0.13, 0.05, 0.18, accent)
+        label(ax, inner_left + 0.13, y + 0.22, heading, font(10, bold=True), accent)
+        y += SESSION_HEIGHT
+
+        for item in items:
+            cap = format_market_cap(item["market_cap"])
+            label(ax, inner_left, y + 0.17, item["ticker"], font(12.5, bold=True))
+            label(ax, inner_right, y + 0.17, cap, font(10), MUTED, ha="right")
+            label(ax, inner_left, y + 0.38, item["name"], font(9.5), MUTED, max_width=inner_right - inner_left - 0.05)
+            y += ROW_HEIGHT
+
+
+def draw_card(grouped, monday, out_path=OUTPUT_FILE):
+    """Render the week. Returns False (and draws nothing) when no company made the cut."""
+    if not any(grouped.values()):
         return False
 
-    header_vals = [
-        f"<b>{day} {(monday + timedelta(days=i)).strftime('%b %d')}</b>"
-        for i, day in enumerate(DAY_LABELS)
-    ]
+    font = Fonts()
+    content_height = max(day_content_height(items) for items in grouped.values())
+    column_height = DAY_HEADER_HEIGHT + content_height + COLUMN_PADDING
+    fig, ax = canvas(CARD_WIDTH, TOP + column_height + FOOTER_HEIGHT)
 
-    cell_vals = [
-        [format_cell(item) for item in day_items] + [""] * (max_rows - len(day_items))
-        for day_items in grouped.values()
-    ]
+    friday = monday + timedelta(days=4)
+    label(ax, MARGIN, 0.40, "Earnings Calendar", font(13), MUTED)
+    label(ax, CARD_WIDTH - MARGIN, 0.40, f"{monday.strftime('%b %d')} – {friday.strftime('%b %d, %Y')}",
+          font(13), MUTED, ha="right")
 
-    fig = go.Figure(data=[go.Table(
-        columnwidth=[150] * len(DAY_LABELS),
-        header=dict(
-            values=header_vals,
-            fill_color="#1f2430",
-            font=dict(color="white", size=15, family="Arial"),
-            align="left",
-            height=38,
-        ),
-        cells=dict(
-            values=cell_vals,
-            fill_color="#2a2f3a",
-            font=dict(color="#E8E8E8", size=13, family="Arial"),
-            align="left",
-            height=56,
-            line_color="#3a3f4a",
-        ),
-    )])
+    width = (CARD_WIDTH - 2 * MARGIN - COLUMN_GAP * (len(DAY_LABELS) - 1)) / len(DAY_LABELS)
+    for i, day in enumerate(DAY_LABELS):
+        draw_day(ax, font, MARGIN + i * (width + COLUMN_GAP), width, column_height,
+                 day, monday + timedelta(days=i), grouped[day])
 
-    fig.update_layout(
-        margin=dict(l=0, r=0, t=0, b=0),
-        width=1050,
-        height=max_rows * 56 + 38,
-    )
+    footer = f"Market cap above {format_market_cap(MIN_MARKET_CAP)} · largest first · Data: Finnhub"
+    label(ax, CARD_WIDTH - MARGIN, TOP + column_height + FOOTER_HEIGHT / 2, footer, font(10), MUTED, ha="right")
 
-    fig.write_image(OUTPUT_FILE)
+    save(fig, out_path)
     return True
 
+
+# ============================================================
+# Entry point
+# ============================================================
 
 def post_to_discord():
     with open(OUTPUT_FILE, "rb") as f:
@@ -170,8 +230,9 @@ def post_to_discord():
 
 def main():
     # Fail fast on missing configuration instead of after the Finnhub calls.
-    for name in (FINNHUB_KEY_ENV, WEBHOOK_ENV):
-        os.environ[name]
+    os.environ[FINNHUB_KEY_ENV]
+    if not DRY_RUN:
+        os.environ[WEBHOOK_ENV]
 
     monday, friday = get_next_week_range()
     entries = fetch_earnings(monday, friday)
@@ -182,12 +243,16 @@ def main():
 
     grouped = group_by_day(entries, monday)
 
-    if not build_chart(grouped, monday):
+    if not draw_card(grouped, monday):
         print("No companies above the market-cap threshold after filtering.")
         return
 
-    post_to_discord()
     total = sum(len(v) for v in grouped.values())
+    if DRY_RUN:
+        print(f"[dry run] {total} companies for {monday} to {friday} -> {OUTPUT_FILE}")
+        return
+
+    post_to_discord()
     print(f"Posted earnings calendar for {monday} to {friday}: {total} companies.")
 
 

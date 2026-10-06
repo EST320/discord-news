@@ -1,5 +1,5 @@
-"""Weekly IPO calendar: a table image of the expected US listings from today
-through the end of next week.
+"""Weekly IPO calendar: one image listing the expected US listings from today
+through the end of next week, grouped by day.
 
 Usage:
     python -m market_pulse.ipo_calendar
@@ -11,10 +11,10 @@ import os
 from datetime import datetime, timezone
 
 import requests
-import plotly.graph_objects as go
 
 from market_pulse.discord import post_webhook
 from market_pulse.earnings_calendar import get_next_week_range
+from market_pulse.theme import MUTED, RULE, TEXT, Fonts, box, canvas, label, save
 
 FINNHUB_KEY_ENV = "FINNHUB_API_KEY"
 WEBHOOK_ENV = "DISCORD_WEBHOOK_URL_IPO"
@@ -27,8 +27,21 @@ OUTPUT_FILE = "ipo_calendar.png"
 SHOWN_STATUSES = {"expected", "priced"}
 MAX_ROWS = 25
 
-COLUMNS = ("Date", "Ticker", "Company", "Exchange", "Price", "Shares", "Deal Size")
-COLUMN_WIDTHS = (95, 80, 330, 190, 115, 95, 105)
+# Card layout, in inches. Each listing is one row; the *_X values are the
+# left edge (or right edge, for the right-aligned deal size) of each column.
+CARD_WIDTH = 12.0
+MARGIN = 0.36
+TOP = 0.74                 # where the column captions sit
+CAPTION_HEIGHT = 0.36
+DAY_HEIGHT = 0.52
+ROW_HEIGHT = 0.66
+ROW_GAP = 0.07
+FOOTER_HEIGHT = 0.50
+TICKER_X = MARGIN + 0.22
+COMPANY_X = MARGIN + 1.50
+PRICE_X = 7.20
+SHARES_X = 9.05
+DEAL_RIGHT_X = CARD_WIDTH - MARGIN - 0.22
 
 
 def fetch_ipos(start, end):
@@ -66,7 +79,6 @@ def format_price(value):
     if not text:
         return "-"
     parts = [f"{to_number(part):.2f}" for part in text.split("-") if part.strip()]
-    # A single dollar sign per cell: Plotly renders text between two as LaTeX.
     return "$" + " - ".join(parts) if parts else "-"
 
 
@@ -113,54 +125,68 @@ def select_listings(entries, start, end):
     return listings
 
 
-def build_rows(listings):
-    """Table rows as text; the date is only printed on the first listing of each day."""
-    rows = []
-    previous_date = None
+def group_by_date(listings):
+    """[(date, [listing, ...])] in the order given, which is already by date."""
+    groups = []
     for item in listings:
-        rows.append((
-            f"<b>{item['date'].strftime('%a %b %d')}</b>" if item["date"] != previous_date else "",
-            f"<b>${item['symbol']}</b>" if item["symbol"] else "-",
-            item["name"] or "-",
-            item["exchange"] or "-",
-            format_price(item["price"]),
-            format_amount(item["shares"]),
-            format_amount(item["deal_size"], "$"),
-        ))
-        previous_date = item["date"]
-    return rows
+        if groups and groups[-1][0] == item["date"]:
+            groups[-1][1].append(item)
+        else:
+            groups.append((item["date"], [item]))
+    return groups
 
 
-def build_chart(listings):
-    shown = listings[:MAX_ROWS]
-    rows = build_rows(shown)
+def card_height(groups):
+    rows = sum(len(items) for _, items in groups)
+    return (TOP + CAPTION_HEIGHT + len(groups) * DAY_HEIGHT
+            + rows * (ROW_HEIGHT + ROW_GAP) + FOOTER_HEIGHT)
 
-    fig = go.Figure(data=[go.Table(
-        columnwidth=list(COLUMN_WIDTHS),
-        header=dict(
-            values=[f"<b>{name}</b>" for name in COLUMNS],
-            fill_color="#1f2430",
-            font=dict(color="white", size=15, family="Arial"),
-            align="left",
-            height=38,
-        ),
-        cells=dict(
-            values=[list(column) for column in zip(*rows)],
-            fill_color="#2a2f3a",
-            font=dict(color="#E8E8E8", size=13, family="Arial"),
-            align="left",
-            height=34,
-            line_color="#3a3f4a",
-        ),
-    )])
 
-    fig.update_layout(
-        margin=dict(l=0, r=0, t=0, b=0),
-        width=sum(COLUMN_WIDTHS),
-        height=len(rows) * 34 + 38,
-    )
+def draw_row(ax, font, y, item):
+    box(ax, MARGIN, y, CARD_WIDTH - 2 * MARGIN, ROW_HEIGHT)
+    upper, lower = y + 0.24, y + 0.46
+    middle = y + ROW_HEIGHT / 2
 
-    fig.write_image(OUTPUT_FILE)
+    ticker = f"${item['symbol']}" if item["symbol"] else "-"
+    label(ax, TICKER_X, middle, ticker, font(13.5, bold=True), max_width=COMPANY_X - TICKER_X - 0.12)
+    label(ax, COMPANY_X, upper, item["name"] or "-", font(12), max_width=PRICE_X - COMPANY_X - 0.25)
+    label(ax, COMPANY_X, lower, item["exchange"] or "-", font(9.5), MUTED, max_width=PRICE_X - COMPANY_X - 0.25)
+    label(ax, PRICE_X, middle, format_price(item["price"]), font(12))
+    label(ax, SHARES_X, middle, format_amount(item["shares"]), font(12))
+    label(ax, DEAL_RIGHT_X, middle, format_amount(item["deal_size"], "$"), font(13.5, bold=True), ha="right")
+
+
+def draw_card(listings, start, end, out_path=OUTPUT_FILE):
+    font = Fonts()
+    groups = group_by_date(listings[:MAX_ROWS])
+    height = card_height(groups)
+    fig, ax = canvas(CARD_WIDTH, height)
+
+    label(ax, MARGIN, 0.40, "IPO Calendar", font(13), MUTED)
+    label(ax, CARD_WIDTH - MARGIN, 0.40, f"{start.strftime('%b %d')} – {end.strftime('%b %d, %Y')}",
+          font(13), MUTED, ha="right")
+
+    caption_y = TOP + CAPTION_HEIGHT / 2
+    for x, text, ha in ((TICKER_X, "TICKER", "left"), (COMPANY_X, "COMPANY · EXCHANGE", "left"),
+                        (PRICE_X, "PRICE RANGE", "left"), (SHARES_X, "SHARES", "left"),
+                        (DEAL_RIGHT_X, "DEAL SIZE", "right")):
+        label(ax, x, caption_y, text, font(9, bold=True), MUTED, ha=ha)
+    ax.plot([MARGIN, CARD_WIDTH - MARGIN], [TOP + CAPTION_HEIGHT] * 2, color=RULE, linewidth=1)
+
+    y = TOP + CAPTION_HEIGHT
+    for date, items in groups:
+        label(ax, MARGIN, y + DAY_HEIGHT * 0.58, date.strftime("%a, %b %d"), font(14, bold=True), TEXT)
+        count = f"{len(items)} listing" + ("s" if len(items) != 1 else "")
+        label(ax, CARD_WIDTH - MARGIN, y + DAY_HEIGHT * 0.58, count, font(10.5), MUTED, ha="right")
+        y += DAY_HEIGHT
+        for item in items:
+            draw_row(ax, font, y, item)
+            y += ROW_HEIGHT + ROW_GAP
+
+    footer = "Expected and priced deals · largest first within each day · Data: Finnhub"
+    label(ax, CARD_WIDTH - MARGIN, height - FOOTER_HEIGHT / 2, footer, font(10), MUTED, ha="right")
+
+    return save(fig, out_path)
 
 
 def main():
@@ -184,7 +210,7 @@ def main():
             })
         return
 
-    build_chart(listings)
+    draw_card(listings, start, end)
     summary = f"{len(listings)} expected IPO(s) for {start} to {end}"
 
     if DRY_RUN:

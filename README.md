@@ -11,13 +11,9 @@ In production since July 2026.
 |---|---|
 | ![Wallstreetcn flash news in Discord](docs/screenshots/wallstreetcn.png) | ![Translated Truth Social post with a card image of the original](docs/screenshots/truth-social.png) |
 
-| Fear & Greed | Earnings calendar |
+| Fear & Greed | Market close |
 |---|---|
-| ![Stock and crypto Fear & Greed gauges side by side, with historical values](docs/screenshots/fear-greed.png) | ![Weekly earnings calendar table](docs/screenshots/earnings-calendar.png) |
-
-| Market close |
-|---|
-| ![US market close summary in Chinese: index tiles with intraday sparklines, a sector heat map, and rates, volatility and commodities](docs/screenshots/market-close.png) |
+| ![Stock and crypto Fear & Greed gauges side by side, with historical values](docs/screenshots/fear-greed.png) | ![US market close summary in Chinese: index tiles with intraday sparklines, a sector heat map, and rates, volatility and commodities](docs/screenshots/market-close.png) |
 
 ## Trackers
 
@@ -26,9 +22,9 @@ In production since July 2026.
 | [`wallstreetcn`](market_pulse/wallstreetcn.py) | Wallstreetcn live feed: US, A-share and HK channels | Headline + body | Every 2 minutes per channel |
 | [`truth_social`](market_pulse/truth_social.py) | CNN's public Truth Social archive | Chinese translation + card image of the original post | Every 5 minutes |
 | [`fear_greed`](market_pulse/fear_greed.py) | CNN Fear & Greed Index, alternative.me Crypto Fear & Greed Index | One image with both gauges and their history, plus the change since last run | Scheduled |
-| [`earnings_calendar`](market_pulse/earnings_calendar.py) | Finnhub earnings calendar and company profile APIs | Table image of next week's earnings, Monday to Friday | Every Friday |
+| [`earnings_calendar`](market_pulse/earnings_calendar.py) | Finnhub earnings calendar and company profile APIs | One image of next week's earnings, a column per day | Every Friday |
 | [`market_close`](market_pulse/market_close.py) | Yahoo Finance | Chinese-language image: S&P 500, Nasdaq, Dow, Russell 2000 (IWM), semiconductors (SOXX), a heat map of the 11 sectors, VIX, 10-year yield, dollar index, gold, oil, bitcoin | Weekdays, 4:15 pm New York time |
-| [`ipo_calendar`](market_pulse/ipo_calendar.py) | Finnhub IPO calendar API | Table image of expected US listings from today through the end of next week | Every Friday |
+| [`ipo_calendar`](market_pulse/ipo_calendar.py) | Finnhub IPO calendar API | One image of expected US listings from today through the end of next week, grouped by day | Every Friday |
 | [`backfill`](market_pulse/backfill.py) | Wallstreetcn (all three channels) | Flash news missed during an outage window | Manual |
 
 The Wallstreetcn feed is Chinese, and Truth Social posts are translated into Chinese, so most of the Discord output is Chinese-language. Code, logs and documentation are in English.
@@ -49,7 +45,7 @@ flowchart LR
 1. **Incremental fetch.** Page through the source by cursor and stop at the first already-seen item or the first page that falls outside the age window. No full scans.
 2. **Dedup.** Compare item IDs against the state file. The Truth Social archive can return the same post under different IDs, so that tracker adds a second layer keyed on a hash of the content.
 3. **Age filter.** Skip items that are too old or have no timestamp (15 minutes for flash news, 12 hours for Truth Social), so historical content is never pushed by accident.
-4. **Format.** Translate with DeepL, render images with Pillow / Matplotlib / Plotly, and build the Discord embed.
+4. **Format.** Translate with DeepL, render images with Pillow / Matplotlib, and build the Discord embed.
 5. **Deliver.** Post through a Discord webhook. An item is written to state **only after it has been delivered**, so a failure midway neither repeats what was sent nor loses what wasn't.
 6. **Persist.** The workflow saves the state file to the `state` branch for the next run to read.
 
@@ -180,7 +176,7 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 
 - Runs on Fridays and covers Monday to Friday of the **following** week, leaving a week to prepare.
 - Keeps only companies above a USD 10 billion market cap, looked up through Finnhub's company profile endpoint.
-- Groups by before-market-open (BMO) and after-market-close (AMC), sorts by market cap within each group, and renders the table with Plotly.
+- One column per weekday in the shared dark theme. Each day is split into Before Open and After Close, largest market cap first, with the cap shown next to every ticker.
 
 ### Market close
 
@@ -199,7 +195,8 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 - Runs alongside the earnings calendar and covers today through next week's Friday. IPO dates are usually fixed only a week or so ahead, so a next-week-only window would often be empty.
 - When nothing is scheduled it posts a one-line note saying so, so that an empty week cannot be mistaken for a failed run.
 - Shows deals Finnhub marks as expected or priced; filed-only and withdrawn deals are left out.
-- Sorted by date, then by deal size, capped at 25 rows.
+- One row per deal in the shared dark theme, grouped under its date and sorted by deal size, capped at 25 rows. Each row shows the ticker, company, exchange, price range, shares offered and deal size.
+- Shares the earnings calendar channel unless `DISCORD_WEBHOOK_URL_IPO` is set.
 
 ### Backfill
 
@@ -243,7 +240,7 @@ git worktree add state state
 | `DISCORD_WEBHOOK_URL_FEARGREED` | Fear & Greed channel |
 | `DISCORD_WEBHOOK_URL_EARNINGS` | Earnings calendar channel |
 | `DISCORD_WEBHOOK_URL_MARKET` | Market close channel. Optional: shares the Fear & Greed channel when unset |
-| `DISCORD_WEBHOOK_URL_IPO` | IPO calendar channel. Optional: falls back to the earnings calendar channel |
+| `DISCORD_WEBHOOK_URL_IPO` | IPO calendar channel. Optional: shares the earnings calendar channel when unset |
 | `DEEPL_API_KEY` | DeepL translation |
 | `FINNHUB_API_KEY` | Finnhub earnings and company data |
 

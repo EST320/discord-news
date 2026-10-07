@@ -11,6 +11,10 @@ In production since July 2026.
 |---|---|
 | ![Wallstreetcn flash news in Discord](docs/screenshots/wallstreetcn.png) | ![Translated Truth Social post with a card image of the original](docs/screenshots/truth-social.png) |
 
+| Earnings calendar | IPO calendar |
+|---|---|
+| ![Next week's earnings, a column per day, split into before open and after close](docs/screenshots/earnings-calendar.png) | ![Upcoming IPOs grouped by expected pricing date](docs/screenshots/ipo-calendar.png) |
+
 | Fear & Greed | Market close |
 |---|---|
 | ![Stock and crypto Fear & Greed gauges side by side, with historical values](docs/screenshots/fear-greed.png) | ![US market close summary in Chinese: index tiles with intraday sparklines, a sector heat map, and rates, volatility and commodities](docs/screenshots/market-close.png) |
@@ -22,9 +26,9 @@ In production since July 2026.
 | [`wallstreetcn`](market_pulse/wallstreetcn.py) | Wallstreetcn live feed: US, A-share and HK channels | Headline + body | Every 2 minutes per channel |
 | [`truth_social`](market_pulse/truth_social.py) | CNN's public Truth Social archive | Chinese translation + card image of the original post | Every 5 minutes |
 | [`fear_greed`](market_pulse/fear_greed.py) | CNN Fear & Greed Index, alternative.me Crypto Fear & Greed Index | One image with both gauges and their history, plus the change since last run | Scheduled |
-| [`earnings_calendar`](market_pulse/earnings_calendar.py) | Finnhub earnings calendar and company profile APIs | One image of next week's earnings, a column per day | Fridays after the US close |
+| [`earnings_calendar`](market_pulse/earnings_calendar.py) | Nasdaq's public calendar API | One image of next week's earnings, a column per day, with market cap and consensus EPS | Fridays after the US close |
 | [`market_close`](market_pulse/market_close.py) | Yahoo Finance | Chinese-language image: S&P 500, Nasdaq, Dow, Russell 2000 (IWM), semiconductors (SOXX), a heat map of the 11 sectors, VIX, 10-year yield, dollar index, gold, oil, bitcoin | Weekdays, 4:15 pm New York time |
-| [`ipo_calendar`](market_pulse/ipo_calendar.py) | Finnhub IPO calendar API | One image of expected US listings from today through the end of next week, grouped by day | Fridays, right after the earnings calendar |
+| [`ipo_calendar`](market_pulse/ipo_calendar.py) | Nasdaq's public calendar API | One image of the US IPOs expected to price from today through the end of next week, grouped by day | Fridays, right after the earnings calendar |
 | [`backfill`](market_pulse/backfill.py) | Wallstreetcn (all three channels) | Flash news missed during an outage window | Manual |
 
 The Wallstreetcn feed is Chinese, and Truth Social posts are translated into Chinese, so most of the Discord output is Chinese-language. Code, logs and documentation are in English.
@@ -70,6 +74,7 @@ market-pulse-discord/
 │   ├── ipo_calendar.py
 │   ├── market_close.py
 │   ├── discord.py                            # Shared webhook client with bounded 429 retries
+│   ├── nasdaq.py                             # Client for Nasdaq's public calendar API
 │   ├── fonts.py                              # Finds a Chinese-capable font for chart text
 │   ├── theme.py                              # Shared dark palette and helpers for chart images
 │   └── paths.py                              # Repo-relative state/ and assets/ paths
@@ -110,7 +115,7 @@ cron-job.org, every N minutes
   → workflow runs the tracker → posts to Discord → saves the state file to the state branch
 ```
 
-A side benefit is that changing the cadence, pausing or resuming a tracker needs no code change. Every tracker runs on `workflow_dispatch` alone, which also allows manual runs from the Actions page for debugging. Pushing a change to the market close or Fear & Greed tracker additionally triggers a dry run that fetches and renders without posting. The weekly calendars are excluded from this on purpose: every run of theirs spends Finnhub API quota.
+A side benefit is that changing the cadence, pausing or resuming a tracker needs no code change. Every tracker runs on `workflow_dispatch` alone, which also allows manual runs from the Actions page for debugging. Pushing a change to the market close or Fear & Greed tracker additionally triggers a dry run that fetches and renders without posting. So does a change to the weekly calendars.
 
 The scheduler also handles time zones. The market close job is set to 4:15 pm in `America/New_York`, so it follows daylight saving time on its own; GitHub's cron only understands UTC.
 
@@ -174,7 +179,9 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 ### Earnings calendar
 
 - Runs on Fridays and covers Monday to Friday of the **following** week, leaving a week to prepare.
-- Keeps only companies above a USD 10 billion market cap, looked up through Finnhub's company profile endpoint.
+- Data comes from the public API behind nasdaq.com's earnings calendar: five requests a week, no key, and market cap, reporting time and consensus EPS in the same response.
+- Shows the 12 largest companies per day above a USD 20 billion market cap. In a quiet week the floor is what limits the list; at the peak of earnings season, when more than 80 companies above the floor can report on a single day, the per-day limit does, and a line under the column says how many more were left out.
+- Each company shows its consensus EPS estimate with an arrow for whether that is above or below the same quarter last year.
 - One column per weekday in the shared dark theme. Each day is split into Before Open and After Close, largest market cap first, with the cap shown next to every ticker.
 
 ### Market close
@@ -194,7 +201,7 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 - Posted by the same workflow run as the earnings calendar, as a second message in the same channel. The two are separate steps, so one failing does not stop the other.
 - Covers today through next week's Friday. IPO dates are usually fixed only a week or so ahead, so a next-week-only window would often be empty.
 - When nothing is scheduled it posts a one-line note saying so, so that an empty week cannot be mistaken for a failed run.
-- Shows deals Finnhub marks as expected or priced; filed-only and withdrawn deals are left out.
+- Shows the deals on Nasdaq's upcoming IPO list, by expected pricing date; filed-only and withdrawn deals are not on that list. Blank-check companies are tagged SPAC.
 - One row per deal in the shared dark theme, grouped under its date and sorted by deal size, capped at 25 rows. Each row shows the ticker, company, exchange, price range, shares offered and deal size.
 - Shares the earnings calendar channel unless `DISCORD_WEBHOOK_URL_IPO` is set.
 
@@ -242,7 +249,6 @@ git worktree add state state
 | `DISCORD_WEBHOOK_URL_MARKET` | Market close channel. Optional: shares the Fear & Greed channel when unset |
 | `DISCORD_WEBHOOK_URL_IPO` | IPO calendar channel. Optional: shares the earnings calendar channel when unset |
 | `DEEPL_API_KEY` | DeepL translation |
-| `FINNHUB_API_KEY` | Finnhub earnings and company data |
 
 ## Known limitations and roadmap
 

@@ -7,27 +7,26 @@ Set DRY_RUN=true to fetch and render without posting.
 """
 
 import os
-import time
 from datetime import datetime, timedelta, timezone
 
-import requests
-
+from market_pulse import nasdaq
 from market_pulse.discord import post_webhook
-from market_pulse.theme import AMBER, INDIGO, MUTED, RULE, Fonts, box, canvas, label, save
+from market_pulse.theme import (
+    AMBER, GREEN, INDIGO, MUTED, RED, RULE, Fonts, box, canvas, label, save, text_width,
+)
 
-FINNHUB_KEY_ENV = "FINNHUB_API_KEY"
 WEBHOOK_ENV = "DISCORD_WEBHOOK_URL_EARNINGS"
 DRY_RUN = os.environ.get("DRY_RUN", "false").lower() in ("1", "true", "yes")
 
-FINNHUB_URL = "https://finnhub.io/api/v1/calendar/earnings"
-PROFILE_URL = "https://finnhub.io/api/v1/stock/profile2"
 OUTPUT_FILE = "earnings_calendar.png"
 
 DAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri")
-TIME_ORDER = {"bmo": 0, "amc": 1, "": 2}
-MIN_MARKET_CAP = 10_000_000_000
-MAX_COMPANIES_PER_DAY = 15
-PROFILE_REQUEST_DELAY = 1.1
+
+# Which companies make the card. In a quiet week the floor decides; at the
+# peak of earnings season, when 80+ companies above the floor can report on
+# one day, the per-day limit keeps only the largest.
+MIN_MARKET_CAP = 20_000_000_000
+MAX_COMPANIES_PER_DAY = 12
 
 # Reporting session -> (heading, accent colour), in display order.
 SESSIONS = {
@@ -44,6 +43,7 @@ TOP = 0.74                 # where the day columns start
 DAY_HEADER_HEIGHT = 0.66
 SESSION_HEIGHT = 0.40
 ROW_HEIGHT = 0.56
+MORE_HEIGHT = 0.40
 COLUMN_PADDING = 0.14
 FOOTER_HEIGHT = 0.50
 
@@ -63,81 +63,36 @@ def get_next_week_range(today=None):
     return next_monday, next_friday
 
 
-def fetch_earnings(start, end):
-    response = requests.get(
-        FINNHUB_URL,
-        params={"from": start.isoformat(), "to": end.isoformat(), "token": os.environ[FINNHUB_KEY_ENV]},
-        timeout=30,
+# ============================================================
+# Data
+# ============================================================
+
+def select_companies(companies):
+    """The day's largest companies above the floor, and how many more were left out.
+
+    Returns (shown, hidden): shown is at most MAX_COMPANIES_PER_DAY items,
+    largest first; hidden counts the other companies that cleared the floor.
+    """
+    eligible = sorted(
+        (c for c in companies if c["market_cap"] >= MIN_MARKET_CAP),
+        key=lambda c: c["market_cap"],
+        reverse=True,
     )
-    response.raise_for_status()
-    return response.json().get("earningsCalendar", [])
+    shown = [{**c, "ticker": f"${c['symbol']}"} for c in eligible[:MAX_COMPANIES_PER_DAY]]
+    return shown, len(eligible) - len(shown)
 
 
-def fetch_profile(symbol, cache):
-    """
-    Fetch a company's name and market cap, caching by symbol.
-
-    A company should appear only once in a given earnings calendar, but the
-    cache guards against the API returning duplicate entries.
-    """
-    if symbol in cache:
-        return cache[symbol]
-
-    response = requests.get(PROFILE_URL, params={"symbol": symbol, "token": os.environ[FINNHUB_KEY_ENV]}, timeout=30)
-    time.sleep(PROFILE_REQUEST_DELAY)
-
-    profile = {"name": symbol, "market_cap": 0}
-    if response.status_code == 200:
-        data = response.json()
-        profile = {
-            "name": data.get("name") or symbol,
-            "market_cap": (data.get("marketCapitalization") or 0) * 1_000_000,
-        }
-
-    cache[symbol] = profile
-    return profile
-
-
-def group_by_day(entries, monday):
-    """
-    Group entries by weekday in a single pass. Entries outside the week or
-    without a symbol are skipped before any profile request is made.
-    """
-    grouped = {day: [] for day in DAY_LABELS}
-    profile_cache = {}
-
-    for entry in entries:
-        date_str = entry.get("date")
-        symbol = entry.get("symbol")
-        hour = entry.get("hour", "")
-
-        if not date_str or not symbol:
-            continue
-
-        offset = (datetime.strptime(date_str, "%Y-%m-%d").date() - monday).days
-        if not 0 <= offset <= 4:
-            continue
-
-        profile = fetch_profile(symbol, profile_cache)
-        if profile["market_cap"] < MIN_MARKET_CAP:
-            continue
-
-        grouped[DAY_LABELS[offset]].append({
-            "ticker": f"${symbol}",
-            "name": profile["name"],
-            "hour": hour,
-            "market_cap": profile["market_cap"],
-        })
-
-    for day_items in grouped.values():
-        day_items.sort(key=lambda x: (TIME_ORDER.get(x["hour"], 2), -x["market_cap"]))
-        del day_items[MAX_COMPANIES_PER_DAY:]
-
-    return grouped
+def load_week(monday):
+    """Fetch Monday to Friday. Returns ({day: [company, ...]}, {day: hidden count})."""
+    grouped, hidden = {}, {}
+    for offset, day in enumerate(DAY_LABELS):
+        companies = nasdaq.fetch_earnings(monday + timedelta(days=offset))
+        grouped[day], hidden[day] = select_companies(companies)
+    return grouped, hidden
 
 
 # ============================================================
-# Chart
+# Formatting
 # ============================================================
 
 def format_market_cap(value):
@@ -145,6 +100,19 @@ def format_market_cap(value):
     if value >= 1e12:
         return f"${value / 1e12:.1f}T"
     return f"${value / 1e9:.0f}B"
+
+
+def format_eps(value):
+    """5.94 -> '$5.94'; -0.12 -> '-$0.12'."""
+    return f"-${abs(value):.2f}" if value < 0 else f"${value:.2f}"
+
+
+def eps_trend(item):
+    """+1, -1 or 0: is the consensus estimate above or below the same quarter last year?"""
+    forecast, last_year = item.get("eps_forecast"), item.get("last_year_eps")
+    if forecast is None or last_year is None or abs(forecast - last_year) < 0.005:
+        return 0
+    return 1 if forecast > last_year else -1
 
 
 def split_sessions(day_items):
@@ -157,14 +125,39 @@ def split_sessions(day_items):
     return sessions
 
 
-def day_content_height(day_items):
+def day_content_height(day_items, hidden=0):
     sessions = split_sessions(day_items)
-    if not sessions:
-        return ROW_HEIGHT
-    return sum(SESSION_HEIGHT + len(items) * ROW_HEIGHT for _, items in sessions)
+    height = sum(SESSION_HEIGHT + len(items) * ROW_HEIGHT for _, items in sessions) if sessions else ROW_HEIGHT
+    return height + (MORE_HEIGHT if hidden else 0)
 
 
-def draw_day(ax, font, x, width, height, day, date, day_items):
+# ============================================================
+# Chart
+# ============================================================
+
+def draw_company(ax, font, y, left, right, item):
+    upper, lower = y + 0.17, y + 0.38
+
+    # First line: ticker, and the consensus EPS with an arrow for its
+    # direction against the same quarter last year.
+    label(ax, left, upper, item["ticker"], font(12.5, bold=True))
+    if item.get("eps_forecast") is not None:
+        trend = eps_trend(item)
+        arrow = {1: "▲", -1: "▼", 0: ""}[trend]
+        arrow_font = font(8)
+        eps_right = right - (text_width(arrow, arrow_font) + 0.05 if arrow else 0)
+        if arrow:
+            label(ax, right, upper + 0.005, arrow, arrow_font, GREEN if trend > 0 else RED, ha="right")
+        label(ax, eps_right, upper, f"est {format_eps(item['eps_forecast'])}", font(10), MUTED, ha="right")
+
+    # Second line: company name, and the market cap the day is sorted by.
+    cap, cap_font = format_market_cap(item["market_cap"]), font(9.5)
+    label(ax, right, lower, cap, cap_font, MUTED, ha="right")
+    label(ax, left, lower, item["name"], font(9.5), MUTED,
+          max_width=right - left - text_width(cap, cap_font) - 0.14)
+
+
+def draw_day(ax, font, x, width, height, day, date, day_items, hidden):
     box(ax, x, TOP, width, height)
     inner_left, inner_right = x + 0.16, x + width - 0.16
 
@@ -185,20 +178,22 @@ def draw_day(ax, font, x, width, height, day, date, day_items):
         y += SESSION_HEIGHT
 
         for item in items:
-            cap = format_market_cap(item["market_cap"])
-            label(ax, inner_left, y + 0.17, item["ticker"], font(12.5, bold=True))
-            label(ax, inner_right, y + 0.17, cap, font(10), MUTED, ha="right")
-            label(ax, inner_left, y + 0.38, item["name"], font(9.5), MUTED, max_width=inner_right - inner_left - 0.05)
+            draw_company(ax, font, y, inner_left, inner_right, item)
             y += ROW_HEIGHT
 
+    if hidden:
+        label(ax, inner_left, y + MORE_HEIGHT / 2, f"+{hidden} more above {format_market_cap(MIN_MARKET_CAP)}",
+              font(9.5), MUTED)
 
-def draw_card(grouped, monday, out_path=OUTPUT_FILE):
+
+def draw_card(grouped, monday, hidden=None, out_path=OUTPUT_FILE):
     """Render the week. Returns False (and draws nothing) when no company made the cut."""
     if not any(grouped.values()):
         return False
+    hidden = hidden or {}
 
     font = Fonts()
-    content_height = max(day_content_height(items) for items in grouped.values())
+    content_height = max(day_content_height(grouped[day], hidden.get(day, 0)) for day in DAY_LABELS)
     column_height = DAY_HEADER_HEIGHT + content_height + COLUMN_PADDING
     fig, ax = canvas(CARD_WIDTH, TOP + column_height + FOOTER_HEIGHT)
 
@@ -210,10 +205,13 @@ def draw_card(grouped, monday, out_path=OUTPUT_FILE):
     width = (CARD_WIDTH - 2 * MARGIN - COLUMN_GAP * (len(DAY_LABELS) - 1)) / len(DAY_LABELS)
     for i, day in enumerate(DAY_LABELS):
         draw_day(ax, font, MARGIN + i * (width + COLUMN_GAP), width, column_height,
-                 day, monday + timedelta(days=i), grouped[day])
+                 day, monday + timedelta(days=i), grouped[day], hidden.get(day, 0))
 
-    footer = f"Market cap above {format_market_cap(MIN_MARKET_CAP)} · largest first · Data: Finnhub"
-    label(ax, CARD_WIDTH - MARGIN, TOP + column_height + FOOTER_HEIGHT / 2, footer, font(10), MUTED, ha="right")
+    footer_y = TOP + column_height + FOOTER_HEIGHT / 2
+    label(ax, MARGIN, footer_y, "est = consensus EPS · ▲▼ vs. the same quarter last year", font(10), MUTED)
+    label(ax, CARD_WIDTH - MARGIN, footer_y,
+          f"Top {MAX_COMPANIES_PER_DAY} per day above {format_market_cap(MIN_MARKET_CAP)} market cap · Data: Nasdaq",
+          font(10), MUTED, ha="right")
 
     save(fig, out_path)
     return True
@@ -229,22 +227,14 @@ def post_to_discord():
 
 
 def main():
-    # Fail fast on missing configuration instead of after the Finnhub calls.
-    os.environ[FINNHUB_KEY_ENV]
     if not DRY_RUN:
-        os.environ[WEBHOOK_ENV]
+        os.environ[WEBHOOK_ENV]  # fail fast on missing configuration
 
     monday, friday = get_next_week_range()
-    entries = fetch_earnings(monday, friday)
+    grouped, hidden = load_week(monday)
 
-    if not entries:
-        print(f"No earnings data for {monday} to {friday}.")
-        return
-
-    grouped = group_by_day(entries, monday)
-
-    if not draw_card(grouped, monday):
-        print("No companies above the market-cap threshold after filtering.")
+    if not draw_card(grouped, monday, hidden):
+        print(f"No companies above the market-cap floor report between {monday} and {friday}.")
         return
 
     total = sum(len(v) for v in grouped.values())

@@ -1,5 +1,5 @@
-"""Weekly IPO calendar: one image listing the expected US listings from today
-through the end of next week, grouped by day.
+"""Weekly IPO calendar: one image listing the US deals expected to price from
+today through the end of next week, grouped by day.
 
 Usage:
     python -m market_pulse.ipo_calendar
@@ -10,21 +10,15 @@ Set DRY_RUN=true to fetch and render without posting.
 import os
 from datetime import datetime, timezone
 
-import requests
-
+from market_pulse import nasdaq
 from market_pulse.discord import post_webhook
 from market_pulse.earnings_calendar import get_next_week_range
-from market_pulse.theme import MUTED, RULE, TEXT, Fonts, box, canvas, label, save
+from market_pulse.theme import AMBER, MUTED, RULE, TEXT, Fonts, box, canvas, label, save, text_width
 
-FINNHUB_KEY_ENV = "FINNHUB_API_KEY"
 WEBHOOK_ENV = "DISCORD_WEBHOOK_URL_IPO"
 DRY_RUN = os.environ.get("DRY_RUN", "false").lower() in ("1", "true", "yes")
 
-FINNHUB_URL = "https://finnhub.io/api/v1/calendar/ipo"
 OUTPUT_FILE = "ipo_calendar.png"
-
-# Finnhub also lists deals that were only filed (no date commitment) or pulled.
-SHOWN_STATUSES = {"expected", "priced"}
 MAX_ROWS = 25
 
 # Card layout, in inches. Each listing is one row; the *_X values are the
@@ -42,17 +36,6 @@ COMPANY_X = MARGIN + 1.50
 PRICE_X = 7.20
 SHARES_X = 9.05
 DEAL_RIGHT_X = CARD_WIDTH - MARGIN - 0.22
-
-
-def fetch_ipos(start, end):
-    response = requests.get(
-        FINNHUB_URL,
-        params={"from": start.isoformat(), "to": end.isoformat(), "token": os.environ[FINNHUB_KEY_ENV]},
-        timeout=30,
-    )
-    response.raise_for_status()
-    entries = response.json().get("ipoCalendar", [])
-    return entries if isinstance(entries, list) else []
 
 
 def to_number(value):
@@ -74,12 +57,17 @@ def format_amount(value, prefix=""):
 
 
 def format_price(value):
-    """Finnhub sends a single price or a 'low-high' range, as text."""
+    """The proposed price arrives as text: a single price or a 'low-high' range."""
     text = str(value or "").strip()
     if not text:
         return "-"
     parts = [f"{to_number(part):.2f}" for part in text.split("-") if part.strip()]
     return "$" + " - ".join(parts) if parts else "-"
+
+
+def is_spac(name):
+    """Blank-check companies are named '... Acquisition Corp' almost without exception."""
+    return "acquisition" in name.lower()
 
 
 def listing_window(today=None):
@@ -93,33 +81,36 @@ def listing_window(today=None):
     return today, next_friday
 
 
-def select_listings(entries, start, end):
-    """Keep the window's expected or priced deals, by date then largest first."""
-    listings = []
-    for entry in entries:
-        if str(entry.get("status") or "").lower() not in SHOWN_STATUSES:
-            continue
-        try:
-            date = datetime.strptime(entry.get("date") or "", "%Y-%m-%d").date()
-        except ValueError:
-            continue
-        if not start <= date <= end:
-            continue
+def months_in(start, end):
+    """The 'YYYY-MM' months the window touches; the calendar is served a month at a time."""
+    months = [start.strftime("%Y-%m")]
+    if end.strftime("%Y-%m") != months[0]:
+        months.append(end.strftime("%Y-%m"))
+    return months
 
-        name = str(entry.get("name") or "").strip()
-        symbol = str(entry.get("symbol") or "").strip()
-        if not name and not symbol:
-            continue
 
-        listings.append({
-            "date": date,
-            "symbol": symbol,
-            "name": name.title() if name.isupper() else name,
-            "exchange": str(entry.get("exchange") or "").strip(),
-            "price": entry.get("price"),
-            "shares": to_number(entry.get("numberOfShares")),
-            "deal_size": to_number(entry.get("totalSharesValue")),
-        })
+def fetch_deals(start, end):
+    deals = []
+    for month in months_in(start, end):
+        deals.extend(nasdaq.fetch_upcoming_ipos(month))
+    return deals
+
+
+def select_listings(deals, start, end):
+    """Keep the window's deals, by date then largest first, without duplicates."""
+    listings, seen = [], set()
+    for deal in deals:
+        if not start <= deal["date"] <= end:
+            continue
+        if not deal["name"] and not deal["symbol"]:
+            continue
+        key = (deal["date"], deal["symbol"], deal["name"])
+        if key in seen:
+            continue
+        seen.add(key)
+
+        name = deal["name"]
+        listings.append({**deal, "name": name.title() if name.isupper() else name, "spac": is_spac(name)})
 
     listings.sort(key=lambda item: (item["date"], -item["deal_size"], item["symbol"]))
     return listings
@@ -146,11 +137,17 @@ def draw_row(ax, font, y, item):
     box(ax, MARGIN, y, CARD_WIDTH - 2 * MARGIN, ROW_HEIGHT)
     upper, lower = y + 0.24, y + 0.46
     middle = y + ROW_HEIGHT / 2
+    company_width = PRICE_X - COMPANY_X - 0.25
 
     ticker = f"${item['symbol']}" if item["symbol"] else "-"
     label(ax, TICKER_X, middle, ticker, font(13.5, bold=True), max_width=COMPANY_X - TICKER_X - 0.12)
-    label(ax, COMPANY_X, upper, item["name"] or "-", font(12), max_width=PRICE_X - COMPANY_X - 0.25)
-    label(ax, COMPANY_X, lower, item["exchange"] or "-", font(9.5), MUTED, max_width=PRICE_X - COMPANY_X - 0.25)
+    label(ax, COMPANY_X, upper, item["name"] or "-", font(12), max_width=company_width)
+
+    exchange, exchange_font = item["exchange"] or "-", font(9.5)
+    label(ax, COMPANY_X, lower, exchange, exchange_font, MUTED, max_width=company_width)
+    if item.get("spac"):
+        label(ax, COMPANY_X + text_width(exchange, exchange_font) + 0.12, lower, "SPAC", font(8.5, bold=True), AMBER)
+
     label(ax, PRICE_X, middle, format_price(item["price"]), font(12))
     label(ax, SHARES_X, middle, format_amount(item["shares"]), font(12))
     label(ax, DEAL_RIGHT_X, middle, format_amount(item["deal_size"], "$"), font(13.5, bold=True), ha="right")
@@ -176,32 +173,31 @@ def draw_card(listings, start, end, out_path=OUTPUT_FILE):
     y = TOP + CAPTION_HEIGHT
     for date, items in groups:
         label(ax, MARGIN, y + DAY_HEIGHT * 0.58, date.strftime("%a, %b %d"), font(14, bold=True), TEXT)
-        count = f"{len(items)} listing" + ("s" if len(items) != 1 else "")
+        count = f"{len(items)} deal" + ("s" if len(items) != 1 else "")
         label(ax, CARD_WIDTH - MARGIN, y + DAY_HEIGHT * 0.58, count, font(10.5), MUTED, ha="right")
         y += DAY_HEIGHT
         for item in items:
             draw_row(ax, font, y, item)
             y += ROW_HEIGHT + ROW_GAP
 
-    footer = "Expected and priced deals · largest first within each day · Data: Finnhub"
-    label(ax, CARD_WIDTH - MARGIN, height - FOOTER_HEIGHT / 2, footer, font(10), MUTED, ha="right")
+    footer_y = height - FOOTER_HEIGHT / 2
+    label(ax, MARGIN, footer_y, "By expected pricing date · trading usually starts the next session", font(10), MUTED)
+    label(ax, CARD_WIDTH - MARGIN, footer_y, "Largest first within each day · Data: Nasdaq", font(10), MUTED, ha="right")
 
     return save(fig, out_path)
 
 
 def main():
-    # Fail fast on missing configuration instead of after the Finnhub call.
-    os.environ[FINNHUB_KEY_ENV]
     if not DRY_RUN:
-        os.environ[WEBHOOK_ENV]
+        os.environ[WEBHOOK_ENV]  # fail fast on missing configuration
 
     start, end = listing_window()
-    entries = fetch_ipos(start, end)
-    listings = select_listings(entries, start, end)
+    deals = fetch_deals(start, end)
+    listings = select_listings(deals, start, end)
     title = f"IPO Calendar · {start.strftime('%b %d')} - {end.strftime('%b %d')}"
 
     if not listings:
-        print(f"No expected IPOs for {start} to {end} ({len(entries)} calendar entries).")
+        print(f"No expected IPOs for {start} to {end} ({len(deals)} upcoming deals this month).")
         if not DRY_RUN:
             # Say so in the channel: silence would look the same as a failed run.
             post_webhook(os.environ[WEBHOOK_ENV], {

@@ -8,6 +8,15 @@ MONDAY = date(2026, 10, 12)
 BILLION = 1_000_000_000
 
 
+def company(symbol, cap_billions, hour="bmo", eps_forecast=None, last_year_eps=None):
+    return {"symbol": symbol, "name": f"{symbol} Inc", "market_cap": cap_billions * BILLION,
+            "hour": hour, "eps_forecast": eps_forecast, "last_year_eps": last_year_eps}
+
+
+def item(ticker, hour, cap_billions=50, **extra):
+    return {"ticker": ticker, "name": ticker, "hour": hour, "market_cap": cap_billions * BILLION, **extra}
+
+
 class NextWeekRangeTest(unittest.TestCase):
     def range_on(self, year, month, day):
         fake_now = datetime(year, month, day, 12, tzinfo=timezone.utc)
@@ -23,72 +32,99 @@ class NextWeekRangeTest(unittest.TestCase):
     def test_crosses_year_boundary(self):
         self.assertEqual(self.range_on(2026, 12, 31), (date(2027, 1, 4), date(2027, 1, 8)))
 
-
-class GroupByDayTest(unittest.TestCase):
-    CAPS = {"BIG": 500 * BILLION, "MID": 50 * BILLION, "SMALL": 1 * BILLION, "LATE": 200 * BILLION}
-
-    def group(self, entries):
-        def fake_profile(symbol, cache):
-            return {"name": f"{symbol} Inc", "market_cap": self.CAPS.get(symbol, 20 * BILLION)}
-
-        with mock.patch.object(ec, "fetch_profile", side_effect=fake_profile) as profile:
-            grouped = ec.group_by_day(entries, MONDAY)
-        return grouped, profile
-
-    def test_filters_small_caps_and_orders_by_session_then_market_cap(self):
-        entries = [
-            {"date": "2026-10-12", "symbol": "LATE", "hour": "amc"},
-            {"date": "2026-10-12", "symbol": "MID", "hour": "bmo"},
-            {"date": "2026-10-12", "symbol": "SMALL", "hour": "bmo"},
-            {"date": "2026-10-12", "symbol": "BIG", "hour": "bmo"},
-        ]
-        grouped, _ = self.group(entries)
-        self.assertEqual([c["ticker"] for c in grouped["Mon"]], ["$BIG", "$MID", "$LATE"])
-        self.assertEqual(grouped["Tue"], [])
-
-    def test_out_of_week_and_incomplete_entries_cost_no_profile_request(self):
-        entries = [
-            {"date": "2026-10-11", "symbol": "BIG"},   # Sunday before
-            {"date": "2026-10-17", "symbol": "BIG"},   # Saturday after
-            {"date": "2026-10-13", "symbol": None},
-            {"symbol": "BIG"},
-        ]
-        grouped, profile = self.group(entries)
-        self.assertTrue(all(not day for day in grouped.values()))
-        profile.assert_not_called()
-
-    def test_caps_companies_per_day(self):
-        entries = [{"date": "2026-10-16", "symbol": f"S{i}", "hour": "bmo"} for i in range(40)]
-        grouped, _ = self.group(entries)
-        self.assertEqual(len(grouped["Fri"]), ec.MAX_COMPANIES_PER_DAY)
+    def test_explicit_date(self):
+        self.assertEqual(ec.get_next_week_range(date(2026, 10, 6)), (date(2026, 10, 12), date(2026, 10, 16)))
 
 
-class LayoutTest(unittest.TestCase):
-    def item(self, ticker, hour, cap=20 * BILLION):
-        return {"ticker": ticker, "name": ticker, "hour": hour, "market_cap": cap}
+class SelectCompaniesTest(unittest.TestCase):
+    def test_floor_drops_small_companies_and_largest_come_first(self):
+        shown, hidden = ec.select_companies([company("MID", 50), company("SMALL", 19.9), company("BIG", 500)])
+        self.assertEqual([c["ticker"] for c in shown], ["$BIG", "$MID"])
+        self.assertEqual(hidden, 0)
 
+    def test_floor_is_inclusive(self):
+        shown, _ = ec.select_companies([company("EDGE", ec.MIN_MARKET_CAP / BILLION)])
+        self.assertEqual(len(shown), 1)
+
+    def test_busy_day_keeps_the_largest_and_counts_the_rest(self):
+        companies = [company(f"S{i}", 100 + i) for i in range(40)] + [company("TINY", 1)]
+        shown, hidden = ec.select_companies(companies)
+        self.assertEqual(len(shown), ec.MAX_COMPANIES_PER_DAY)
+        self.assertEqual(shown[0]["ticker"], "$S39")
+        self.assertEqual(hidden, 40 - ec.MAX_COMPANIES_PER_DAY)
+
+    def test_week_is_fetched_one_day_at_a_time(self):
+        def fake_fetch(day):
+            return [company("ONLY", 100)] if day == date(2026, 10, 13) else []
+
+        with mock.patch.object(ec.nasdaq, "fetch_earnings", side_effect=fake_fetch) as fetch:
+            grouped, hidden = ec.load_week(MONDAY)
+
+        self.assertEqual([call.args[0] for call in fetch.call_args_list],
+                         [date(2026, 10, d) for d in (12, 13, 14, 15, 16)])
+        self.assertEqual([len(grouped[day]) for day in ec.DAY_LABELS], [0, 1, 0, 0, 0])
+        self.assertEqual(set(hidden.values()), {0})
+
+
+class FormattingTest(unittest.TestCase):
     def test_market_cap_labels(self):
         self.assertEqual(ec.format_market_cap(245 * BILLION), "$245B")
         self.assertEqual(ec.format_market_cap(1200 * BILLION), "$1.2T")
-        self.assertEqual(ec.format_market_cap(ec.MIN_MARKET_CAP), "$10B")
+        self.assertEqual(ec.format_market_cap(ec.MIN_MARKET_CAP), "$20B")
 
+    def test_eps_labels(self):
+        self.assertEqual(ec.format_eps(5.94), "$5.94")
+        self.assertEqual(ec.format_eps(-0.15), "-$0.15")
+
+    def test_eps_trend_against_last_year(self):
+        self.assertEqual(ec.eps_trend({"eps_forecast": 5.94, "last_year_eps": 5.07}), 1)
+        self.assertEqual(ec.eps_trend({"eps_forecast": 0.14, "last_year_eps": 0.20}), -1)
+        self.assertEqual(ec.eps_trend({"eps_forecast": 1.00, "last_year_eps": 1.00}), 0)
+        self.assertEqual(ec.eps_trend({"eps_forecast": 1.00, "last_year_eps": None}), 0)
+        self.assertEqual(ec.eps_trend({"eps_forecast": None, "last_year_eps": 1.00}), 0)
+
+
+class LayoutTest(unittest.TestCase):
     def test_sessions_keep_display_order_and_drop_empty_ones(self):
-        items = [self.item("$A", "amc"), self.item("$B", "bmo"), self.item("$C", "dmh"), self.item("$D", "bmo")]
+        items = [item("$A", "amc"), item("$B", "bmo"), item("$C", "dmh"), item("$D", "bmo")]
         sessions = ec.split_sessions(items)
         self.assertEqual([key for key, _ in sessions], ["bmo", "amc", ""])
         self.assertEqual([[i["ticker"] for i in group] for _, group in sessions], [["$B", "$D"], ["$A"], ["$C"]])
-        self.assertEqual(ec.split_sessions([self.item("$A", "amc")]), [("amc", [self.item("$A", "amc")])])
 
-    def test_column_height_grows_with_reports(self):
-        empty = ec.day_content_height([])
-        one = ec.day_content_height([self.item("$A", "bmo")])
-        two_sessions = ec.day_content_height([self.item("$A", "bmo"), self.item("$B", "amc")])
-        self.assertEqual(empty, ec.ROW_HEIGHT)
+    def test_column_height_grows_with_reports_and_the_more_line(self):
+        self.assertEqual(ec.day_content_height([]), ec.ROW_HEIGHT)
+        one = ec.day_content_height([item("$A", "bmo")])
         self.assertAlmostEqual(one, ec.SESSION_HEIGHT + ec.ROW_HEIGHT)
-        self.assertAlmostEqual(two_sessions, 2 * (ec.SESSION_HEIGHT + ec.ROW_HEIGHT))
+        self.assertAlmostEqual(ec.day_content_height([item("$A", "bmo"), item("$B", "amc")]),
+                               2 * (ec.SESSION_HEIGHT + ec.ROW_HEIGHT))
+        self.assertAlmostEqual(ec.day_content_height([item("$A", "bmo")], hidden=5), one + ec.MORE_HEIGHT)
 
     def test_nothing_is_drawn_for_an_empty_week(self):
         self.assertFalse(ec.draw_card({day: [] for day in ec.DAY_LABELS}, MONDAY))
+
+
+class MainTest(unittest.TestCase):
+    def run_main(self, drawn, dry_run=False):
+        patches = (
+            mock.patch.object(ec, "load_week", return_value=({day: [] for day in ec.DAY_LABELS}, {})),
+            mock.patch.object(ec, "draw_card", return_value=drawn),
+            mock.patch.object(ec, "post_to_discord"),
+            mock.patch.object(ec, "DRY_RUN", dry_run),
+            mock.patch.dict("os.environ", {ec.WEBHOOK_ENV: "hook"}),
+            mock.patch("builtins.print"),
+        )
+        with patches[0], patches[1], patches[2] as post, patches[3], patches[4], patches[5]:
+            ec.main()
+        return post
+
+    def test_posts_when_there_is_a_card(self):
+        self.run_main(drawn=True).assert_called_once()
+
+    def test_stays_quiet_when_nothing_qualifies(self):
+        self.run_main(drawn=False).assert_not_called()
+
+    def test_dry_run_posts_nothing(self):
+        self.run_main(drawn=True, dry_run=True).assert_not_called()
 
 
 if __name__ == "__main__":

@@ -32,7 +32,11 @@ MAX_COMPANIES_PER_DAY = 12
 DOLLAR_VOLUME_DAYS = 20
 # In a quiet week fewer than 12 companies report on a day, so the per-day
 # limit never bites; this floor is what keeps thinly traded names off then.
-MIN_DOLLAR_VOLUME = 200_000_000
+MIN_DOLLAR_VOLUME = 500_000_000
+# Always shown when they report, whatever their size or trading volume.
+# Trading activity cannot tell a household name that mostly trades abroad
+# (Infosys, Ericsson, ICICI Bank) from an obscure one, so those are listed here.
+WATCHLIST = {"INFY", "ERIC", "IBN", "AA"}
 # The 20-day average costs one request per company, so each day is first cut
 # down to this many candidates using a single session's volume.
 SHORTLIST_PER_DAY = 30
@@ -79,17 +83,18 @@ def get_next_week_range(today=None):
 # ============================================================
 
 def eligible_companies(companies):
-    return [c for c in companies if c["market_cap"] >= MIN_MARKET_CAP]
+    return [c for c in companies if c["market_cap"] >= MIN_MARKET_CAP or c["symbol"] in WATCHLIST]
 
 
 def shortlist(companies, one_day_volume):
-    """The day's candidates for the 20-day lookup: the most traded in the latest session.
+    """The day's candidates for the 20-day lookup: the watchlist, then the most
+    traded in the latest session.
 
     Without any volume data (the screener request failed) it falls back to the largest.
     """
     ranked = sorted(
         eligible_companies(companies),
-        key=lambda c: (one_day_volume.get(c["symbol"], 0.0), c["market_cap"]),
+        key=lambda c: (c["symbol"] in WATCHLIST, one_day_volume.get(c["symbol"], 0.0), c["market_cap"]),
         reverse=True,
     )
     return ranked[:SHORTLIST_PER_DAY]
@@ -98,13 +103,15 @@ def shortlist(companies, one_day_volume):
 def select_companies(companies, average_volume, one_day_volume=None):
     """The day's most actively traded companies, and how many others cleared the cap floor.
 
-    Returns (shown, hidden). shown holds at most MAX_COMPANIES_PER_DAY items,
-    most traded first, each with its "dollar_volume". A company's 20-day
-    average is used when known and the latest session's volume otherwise.
-    Companies known to trade less than MIN_DOLLAR_VOLUME a day are left out.
-    A company with no volume data at all is kept and ranked last by market
-    cap, so that losing the volume sources degrades to a largest-first list
-    instead of an empty one.
+    Returns (shown, hidden). shown is ordered most traded first, each item
+    with its "dollar_volume": the 20-day average when known, the latest
+    session's volume otherwise.
+
+    Watchlist companies are always shown. The rest fill the remaining places
+    up to MAX_COMPANIES_PER_DAY, and are left out when known to trade less
+    than MIN_DOLLAR_VOLUME a day. A company with no volume data at all is
+    kept and ranked last by market cap, so that losing the volume sources
+    degrades to a largest-first list instead of an empty one.
     """
     one_day_volume = one_day_volume or {}
     eligible = eligible_companies(companies)
@@ -113,16 +120,21 @@ def select_companies(companies, average_volume, one_day_volume=None):
         symbol = company["symbol"]
         return average_volume.get(symbol) or one_day_volume.get(symbol, 0.0)
 
-    ranked = sorted(
-        (c for c in eligible if not 0 < activity(c) < MIN_DOLLAR_VOLUME),
-        key=lambda c: (activity(c), c["market_cap"]),
+    def rank(company):
+        return activity(company), company["market_cap"]
+
+    watched = [c for c in eligible if c["symbol"] in WATCHLIST]
+    others = sorted(
+        (c for c in eligible if c["symbol"] not in WATCHLIST and not 0 < activity(c) < MIN_DOLLAR_VOLUME),
+        key=rank,
         reverse=True,
     )
+    chosen = watched + others[:max(0, MAX_COMPANIES_PER_DAY - len(watched))]
     shown = [
         {**c, "ticker": f"${c['symbol']}", "dollar_volume": activity(c)}
-        for c in ranked[:MAX_COMPANIES_PER_DAY]
+        for c in sorted(chosen, key=rank, reverse=True)
     ]
-    return shown, len(eligible) - len(shown)
+    return shown, max(0, len(eligible) - len(shown))
 
 
 def load_week(monday):
@@ -146,7 +158,7 @@ def load_week(monday):
         candidates_today = shortlist(companies, one_day_volume)
         shown, _ = select_companies(candidates_today, average_volume, one_day_volume)
         grouped[day] = shown
-        hidden[day] = len(eligible_companies(companies)) - len(shown)
+        hidden[day] = max(0, len(eligible_companies(companies)) - len(shown))
     return grouped, hidden
 
 

@@ -61,6 +61,7 @@ class SelectCompaniesTest(unittest.TestCase):
     def test_thinly_traded_companies_are_left_out_even_in_a_quiet_week(self):
         companies = [company("JPM", 884), company("HOMB", 5.5), company("BUD", 148)]
         volume = {"JPM": 2.9 * BILLION, "HOMB": 30 * self.MILLION, "BUD": ec.MIN_DOLLAR_VOLUME - 1}
+        self.assertEqual(ec.MIN_DOLLAR_VOLUME, 500 * self.MILLION)
         shown, hidden = ec.select_companies(companies, volume)
         self.assertEqual([c["ticker"] for c in shown], ["$JPM"])
         self.assertEqual(hidden, 2)
@@ -72,6 +73,30 @@ class SelectCompaniesTest(unittest.TestCase):
         self.assertEqual(len(shown), ec.MAX_COMPANIES_PER_DAY)
         self.assertEqual(shown[0]["ticker"], "$S39")
         self.assertEqual(hidden, 40 - ec.MAX_COMPANIES_PER_DAY)
+
+    def test_watchlist_is_always_shown_whatever_its_size_or_volume(self):
+        with mock.patch.object(ec, "WATCHLIST", {"INFY", "TINY"}):
+            companies = [company("JPM", 884), company("INFY", 44), company("TINY", 1), company("COLD", 300)]
+            volume = {"JPM": 2.9 * BILLION, "INFY": 0.2 * BILLION, "TINY": 0.01 * BILLION, "COLD": 0.1 * BILLION}
+            shown, hidden = ec.select_companies(companies, volume)
+        self.assertEqual([c["ticker"] for c in shown], ["$JPM", "$INFY", "$TINY"])
+        self.assertEqual(hidden, 1)
+
+    def test_watchlist_takes_places_from_the_least_traded_on_a_busy_day(self):
+        with mock.patch.object(ec, "WATCHLIST", {"QUIET"}):
+            companies = [company(f"S{i}", 100) for i in range(40)] + [company("QUIET", 20)]
+            volume = {f"S{i}": (i + 1) * BILLION for i in range(40)}
+            volume["QUIET"] = 0.1 * BILLION
+            shown, _ = ec.select_companies(companies, volume)
+            listed = ec.shortlist(companies, volume)
+        self.assertEqual(len(shown), ec.MAX_COMPANIES_PER_DAY)
+        self.assertEqual(shown[-1]["ticker"], "$QUIET")
+        self.assertEqual(shown[0]["ticker"], "$S39")
+        # It must also survive the shortlist, or its 20-day volume is never looked up.
+        self.assertEqual(listed[0]["symbol"], "QUIET")
+
+    def test_default_watchlist(self):
+        self.assertEqual(ec.WATCHLIST, {"INFY", "ERIC", "IBN", "AA"})
 
     def test_latest_session_volume_stands_in_for_a_missing_average(self):
         companies = [company("AVG", 50), company("ONEDAY", 50)]

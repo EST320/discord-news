@@ -3,25 +3,17 @@ name: Weekly Calendars to Discord
 # Posts next week's earnings calendar, then the IPO calendar, to the same
 # channel. Triggered by the external scheduler once a week, after Friday's
 # US close (see README, "Triggering").
+#
+# Deliberately not run on push: every run spends Finnhub API quota (the
+# earnings calendar makes one profile request per company).
 on:
   workflow_dispatch:
-  # A change to either tracker triggers a dry run: fetch and render, post nothing.
-  push:
-    branches: [main]
-    paths:
-      - "market_pulse/earnings_calendar.py"
-      - "market_pulse/ipo_calendar.py"
-      - "market_pulse/theme.py"
-      - "market_pulse/fonts.py"
-      - "requirements/calendars.txt"
-      - ".github/workflows/weekly-calendars.yml"
 
 permissions:
   contents: read
 
 env:
   FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-  DRY_RUN: ${{ github.event_name == 'push' }}
 
 jobs:
   post-calendars:

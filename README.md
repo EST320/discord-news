@@ -110,7 +110,7 @@ cron-job.org, every N minutes
   → workflow runs the tracker → posts to Discord → saves the state file to the state branch
 ```
 
-A side benefit is that changing the cadence, pausing or resuming a tracker needs no code change. Every tracker runs on `workflow_dispatch` alone, which also allows manual runs from the Actions page for debugging. Pushing a change to the market close or IPO tracker additionally triggers a dry run that fetches and renders without posting.
+A side benefit is that changing the cadence, pausing or resuming a tracker needs no code change. Every tracker runs on `workflow_dispatch` alone, which also allows manual runs from the Actions page for debugging. Pushing a change to the market close or Fear & Greed tracker additionally triggers a dry run that fetches and renders without posting. The weekly calendars are excluded from this on purpose: every run of theirs spends Finnhub API quota.
 
 The scheduler also handles time zones. The market close job is set to 4:15 pm in `America/New_York`, so it follows daylight saving time on its own; GitHub's cron only understands UTC.
 

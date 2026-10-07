@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from market_pulse import nasdaq
 from market_pulse.discord import post_webhook
 from market_pulse.earnings_calendar import get_next_week_range
-from market_pulse.theme import AMBER, MUTED, RULE, TEXT, Fonts, box, canvas, label, save, text_width
+from market_pulse.theme import AMBER, MUTED, RULE, TEXT, Fonts, box, canvas, label, save, text_width, wrap
 
 WEBHOOK_ENV = "DISCORD_WEBHOOK_URL_IPO"
 DRY_RUN = os.environ.get("DRY_RUN", "false").lower() in ("1", "true", "yes")
@@ -28,7 +28,8 @@ MARGIN = 0.36
 TOP = 0.74                 # where the column captions sit
 CAPTION_HEIGHT = 0.36
 DAY_HEIGHT = 0.52
-ROW_HEIGHT = 0.66
+ROW_HEIGHT = 0.66          # a deal whose company name fits on one line
+NAME_LINE_HEIGHT = 0.22    # each further line of a wrapped name
 ROW_GAP = 0.07
 FOOTER_HEIGHT = 0.50
 TICKER_X = MARGIN + 0.22
@@ -36,6 +37,7 @@ COMPANY_X = MARGIN + 1.50
 PRICE_X = 7.20
 SHARES_X = 9.05
 DEAL_RIGHT_X = CARD_WIDTH - MARGIN - 0.22
+COMPANY_WIDTH = PRICE_X - COMPANY_X - 0.25
 
 
 def to_number(value):
@@ -127,24 +129,31 @@ def group_by_date(listings):
     return groups
 
 
+def row_height(item):
+    return ROW_HEIGHT + (len(item.get("name_lines") or [""]) - 1) * NAME_LINE_HEIGHT
+
+
 def card_height(groups):
-    rows = sum(len(items) for _, items in groups)
-    return (TOP + CAPTION_HEIGHT + len(groups) * DAY_HEIGHT
-            + rows * (ROW_HEIGHT + ROW_GAP) + FOOTER_HEIGHT)
+    rows = sum(row_height(item) + ROW_GAP for _, items in groups for item in items)
+    return TOP + CAPTION_HEIGHT + len(groups) * DAY_HEIGHT + rows + FOOTER_HEIGHT
 
 
 def draw_row(ax, font, y, item):
-    box(ax, MARGIN, y, CARD_WIDTH - 2 * MARGIN, ROW_HEIGHT)
-    upper, lower = y + 0.24, y + 0.46
-    middle = y + ROW_HEIGHT / 2
-    company_width = PRICE_X - COMPANY_X - 0.25
+    height = row_height(item)
+    box(ax, MARGIN, y, CARD_WIDTH - 2 * MARGIN, height)
+    middle = y + height / 2
 
     ticker = f"${item['symbol']}" if item["symbol"] else "-"
     label(ax, TICKER_X, middle, ticker, font(13.5, bold=True), max_width=COMPANY_X - TICKER_X - 0.12)
-    label(ax, COMPANY_X, upper, item["name"] or "-", font(12), max_width=company_width)
+
+    # The full company name, wrapped onto as many lines as it needs, then the exchange.
+    lines = item.get("name_lines") or [item["name"] or "-"]
+    for i, line in enumerate(lines):
+        label(ax, COMPANY_X, y + 0.24 + i * NAME_LINE_HEIGHT, line, font(12))
+    lower = y + 0.46 + (len(lines) - 1) * NAME_LINE_HEIGHT
 
     exchange, exchange_font = item["exchange"] or "-", font(9.5)
-    label(ax, COMPANY_X, lower, exchange, exchange_font, MUTED, max_width=company_width)
+    label(ax, COMPANY_X, lower, exchange, exchange_font, MUTED, max_width=COMPANY_WIDTH)
     if item.get("spac"):
         label(ax, COMPANY_X + text_width(exchange, exchange_font) + 0.12, lower, "SPAC", font(8.5, bold=True), AMBER)
 
@@ -155,7 +164,10 @@ def draw_row(ax, font, y, item):
 
 def draw_card(listings, start, end, out_path=OUTPUT_FILE):
     font = Fonts()
-    groups = group_by_date(listings[:MAX_ROWS])
+    shown = listings[:MAX_ROWS]
+    for item in shown:
+        item["name_lines"] = wrap(item["name"] or "-", font(12), COMPANY_WIDTH - 0.1)
+    groups = group_by_date(shown)
     height = card_height(groups)
     fig, ax = canvas(CARD_WIDTH, height)
 
@@ -178,7 +190,7 @@ def draw_card(listings, start, end, out_path=OUTPUT_FILE):
         y += DAY_HEIGHT
         for item in items:
             draw_row(ax, font, y, item)
-            y += ROW_HEIGHT + ROW_GAP
+            y += row_height(item) + ROW_GAP
 
     footer_y = height - FOOTER_HEIGHT / 2
     label(ax, MARGIN, footer_y, "By expected pricing date · trading usually starts the next session", font(10), MUTED)

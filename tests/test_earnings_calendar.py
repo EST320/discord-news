@@ -2,7 +2,10 @@ import unittest
 from datetime import date, datetime, timezone
 from unittest import mock
 
+from matplotlib.font_manager import FontProperties
+
 from market_pulse import earnings_calendar as ec
+from market_pulse import theme
 
 MONDAY = date(2026, 10, 12)
 BILLION = 1_000_000_000
@@ -98,6 +101,34 @@ class LayoutTest(unittest.TestCase):
         self.assertAlmostEqual(ec.day_content_height([item("$A", "bmo"), item("$B", "amc")]),
                                2 * (ec.SESSION_HEIGHT + ec.ROW_HEIGHT))
         self.assertAlmostEqual(ec.day_content_height([item("$A", "bmo")], hidden=5), one + ec.MORE_HEIGHT)
+
+    def test_full_name_is_wrapped_never_cut(self):
+        font = FontProperties(size=9.5)
+        name = "Taiwan Semiconductor Manufacturing Company Limited"
+        lines, _ = ec.layout_name(name, "$2.5T", font, font, 1.84)
+        self.assertGreater(len(lines), 1)
+        self.assertEqual(" ".join(lines), name)
+        self.assertNotIn("…", "".join(lines))
+
+    def test_market_cap_shares_the_last_line_only_when_it_fits(self):
+        font = FontProperties(size=9.5)
+        self.assertEqual(ec.layout_name("Marsh", "$81B", font, font, 1.84), (["Marsh"], True))
+        # A name that fills its line leaves no room, so the cap moves below it.
+        full_line = "W"
+        while theme.text_width(full_line + "W", font) <= 1.84 - 0.08:  # the wrap margin
+            full_line += "W"
+        self.assertEqual(ec.layout_name(full_line, "$40B", font, font, 1.84), ([full_line], False))
+
+    def test_row_height_follows_the_layout(self):
+        short = item("$A", "bmo", layout=(["One line"], True))
+        wrapped = item("$B", "bmo", layout=(["First line", "second line"], True))
+        cap_below = item("$C", "bmo", layout=(["Fills the whole line"], False))
+        self.assertEqual(ec.row_height(item("$D", "bmo")), ec.ROW_HEIGHT)
+        self.assertEqual(ec.row_height(short), ec.ROW_HEIGHT)
+        self.assertAlmostEqual(ec.row_height(wrapped), ec.ROW_HEIGHT + ec.NAME_LINE_HEIGHT)
+        self.assertAlmostEqual(ec.row_height(cap_below), ec.ROW_HEIGHT + ec.NAME_LINE_HEIGHT)
+        self.assertAlmostEqual(ec.day_content_height([short, wrapped]),
+                               ec.SESSION_HEIGHT + 2 * ec.ROW_HEIGHT + ec.NAME_LINE_HEIGHT)
 
     def test_nothing_is_drawn_for_an_empty_week(self):
         self.assertFalse(ec.draw_card({day: [] for day in ec.DAY_LABELS}, MONDAY))

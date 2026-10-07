@@ -89,6 +89,29 @@ def ellipsize(text, font_properties, max_width):
     return text.rstrip() + "…"
 
 
+def wrap(text, font_properties, max_width):
+    """Break the text into lines no wider than max_width inches, at spaces where possible."""
+    lines, current = [], ""
+    for word in str(text).split():
+        candidate = f"{current} {word}" if current else word
+        if text_width(candidate, font_properties) <= max_width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        # A single word wider than the line is split mid-word rather than overflowing.
+        while text_width(word, font_properties) > max_width and len(word) > 1:
+            cut = len(word) - 1
+            while cut > 1 and text_width(word[:cut], font_properties) > max_width:
+                cut -= 1
+            lines.append(word[:cut])
+            word = word[cut:]
+        current = word
+    if current:
+        lines.append(current)
+    return lines or [""]
+
+
 def label(ax, x, y, text, font_properties, color=TEXT, ha="left", max_width=None):
     """Draw one line of text, vertically centred on y, optionally ellipsized."""
     if max_width is not None:

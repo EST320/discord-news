@@ -109,6 +109,14 @@ class LayoutTest(unittest.TestCase):
         extra = ic.card_height(two_days) - ic.card_height(one_day)
         self.assertAlmostEqual(extra, ic.DAY_HEIGHT + ic.ROW_HEIGHT + ic.ROW_GAP)
 
+    def test_a_wrapped_company_name_makes_its_row_taller(self):
+        plain = self.listings()[0]
+        wrapped = {**plain, "name_lines": ["A Very Long Company Name Holdings International", "Group Limited Partnership"]}
+        self.assertEqual(ic.row_height(plain), ic.ROW_HEIGHT)
+        self.assertAlmostEqual(ic.row_height(wrapped), ic.ROW_HEIGHT + ic.NAME_LINE_HEIGHT)
+        groups = [(plain["date"], [wrapped])]
+        self.assertAlmostEqual(ic.card_height(groups) - ic.card_height([(plain["date"], [plain])]), ic.NAME_LINE_HEIGHT)
+
 
 class EmptyCalendarTest(unittest.TestCase):
     def run_main(self, dry_run):

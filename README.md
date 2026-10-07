@@ -182,6 +182,7 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 - Data comes from the public API behind nasdaq.com's earnings calendar: five requests a week, no key, and market cap, reporting time and consensus EPS in the same response.
 - Shows the 12 largest companies per day above a USD 20 billion market cap. In a quiet week the floor is what limits the list; at the peak of earnings season, when more than 80 companies above the floor can report on a single day, the per-day limit does, and a line under the column says how many more were left out.
 - Each company shows its consensus EPS estimate with an arrow for whether that is above or below the same quarter last year.
+- Company names are always shown in full, wrapped onto a second or third line when needed, so rows vary in height.
 - One column per weekday in the shared dark theme. Each day is split into Before Open and After Close, largest market cap first, with the cap shown next to every ticker.
 
 ### Market close
@@ -202,7 +203,7 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 - Covers today through next week's Friday. IPO dates are usually fixed only a week or so ahead, so a next-week-only window would often be empty.
 - When nothing is scheduled it posts a one-line note saying so, so that an empty week cannot be mistaken for a failed run.
 - Shows the deals on Nasdaq's upcoming IPO list, by expected pricing date; filed-only and withdrawn deals are not on that list. Blank-check companies are tagged SPAC.
-- One row per deal in the shared dark theme, grouped under its date and sorted by deal size, capped at 25 rows. Each row shows the ticker, company, exchange, price range, shares offered and deal size.
+- One row per deal in the shared dark theme, grouped under its date and sorted by deal size, capped at 25 rows. Each row shows the ticker, the full company name (wrapped if long), exchange, price range, shares offered and deal size.
 - Shares the earnings calendar channel unless `DISCORD_WEBHOOK_URL_IPO` is set.
 
 ### Backfill

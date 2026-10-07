@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from market_pulse import nasdaq
 from market_pulse.discord import post_webhook
 from market_pulse.theme import (
-    AMBER, GREEN, INDIGO, MUTED, RED, RULE, Fonts, box, canvas, label, save, text_width,
+    AMBER, GREEN, INDIGO, MUTED, RED, RULE, Fonts, box, canvas, label, save, text_width, wrap,
 )
 
 WEBHOOK_ENV = "DISCORD_WEBHOOK_URL_EARNINGS"
@@ -42,7 +42,9 @@ COLUMN_GAP = 0.12
 TOP = 0.74                 # where the day columns start
 DAY_HEADER_HEIGHT = 0.66
 SESSION_HEIGHT = 0.40
-ROW_HEIGHT = 0.56
+ROW_HEIGHT = 0.56          # a company whose name fits on one line
+NAME_LINE_HEIGHT = 0.19    # each further line of a wrapped name
+COLUMN_INSET = 0.16
 MORE_HEIGHT = 0.40
 COLUMN_PADDING = 0.14
 FOOTER_HEIGHT = 0.50
@@ -125,9 +127,30 @@ def split_sessions(day_items):
     return sessions
 
 
+def layout_name(name, cap, name_font, cap_font, width):
+    """Wrap the company name to the column and place the market cap.
+
+    Returns (lines, cap_inline). The full name is always shown, on as many
+    lines as it needs. The cap sits at the right of the last line when there
+    is room, and otherwise gets a line of its own.
+    """
+    # Measured widths run slightly under the rendered ones, so wrap a little early.
+    lines = wrap(name, name_font, width - 0.08)
+    room = width - text_width(lines[-1], name_font) - 0.14
+    return lines, bool(text_width(cap, cap_font) <= room)
+
+
+def row_height(item):
+    lines, cap_inline = item.get("layout") or ([item["name"]], True)
+    return ROW_HEIGHT + (len(lines) - 1 + (0 if cap_inline else 1)) * NAME_LINE_HEIGHT
+
+
 def day_content_height(day_items, hidden=0):
     sessions = split_sessions(day_items)
-    height = sum(SESSION_HEIGHT + len(items) * ROW_HEIGHT for _, items in sessions) if sessions else ROW_HEIGHT
+    if sessions:
+        height = sum(SESSION_HEIGHT + sum(row_height(item) for item in items) for _, items in sessions)
+    else:
+        height = ROW_HEIGHT
     return height + (MORE_HEIGHT if hidden else 0)
 
 
@@ -150,16 +173,19 @@ def draw_company(ax, font, y, left, right, item):
             label(ax, right, upper + 0.005, arrow, arrow_font, GREEN if trend > 0 else RED, ha="right")
         label(ax, eps_right, upper, f"est {format_eps(item['eps_forecast'])}", font(10), MUTED, ha="right")
 
-    # Second line: company name, and the market cap the day is sorted by.
-    cap, cap_font = format_market_cap(item["market_cap"]), font(9.5)
-    label(ax, right, lower, cap, cap_font, MUTED, ha="right")
-    label(ax, left, lower, item["name"], font(9.5), MUTED,
-          max_width=right - left - text_width(cap, cap_font) - 0.14)
+    # Below: the full company name, wrapped, with the market cap the day is
+    # sorted by at the end of its last line (or on its own line if it won't fit).
+    lines, cap_inline = item.get("layout") or ([item["name"]], True)
+    for i, line in enumerate(lines):
+        label(ax, left, lower + i * NAME_LINE_HEIGHT, line, font(9.5), MUTED)
+    cap_line = len(lines) - 1 if cap_inline else len(lines)
+    label(ax, right, lower + cap_line * NAME_LINE_HEIGHT, format_market_cap(item["market_cap"]),
+          font(9.5), MUTED, ha="right")
 
 
 def draw_day(ax, font, x, width, height, day, date, day_items, hidden):
     box(ax, x, TOP, width, height)
-    inner_left, inner_right = x + 0.16, x + width - 0.16
+    inner_left, inner_right = x + COLUMN_INSET, x + width - COLUMN_INSET
 
     label(ax, inner_left, TOP + 0.33, day, font(15, bold=True))
     label(ax, inner_right, TOP + 0.33, date.strftime("%b %d"), font(11), MUTED, ha="right")
@@ -179,7 +205,7 @@ def draw_day(ax, font, x, width, height, day, date, day_items, hidden):
 
         for item in items:
             draw_company(ax, font, y, inner_left, inner_right, item)
-            y += ROW_HEIGHT
+            y += row_height(item)
 
     if hidden:
         label(ax, inner_left, y + MORE_HEIGHT / 2, f"+{hidden} more above {format_market_cap(MIN_MARKET_CAP)}",
@@ -193,6 +219,11 @@ def draw_card(grouped, monday, hidden=None, out_path=OUTPUT_FILE):
     hidden = hidden or {}
 
     font = Fonts()
+    width = (CARD_WIDTH - 2 * MARGIN - COLUMN_GAP * (len(DAY_LABELS) - 1)) / len(DAY_LABELS)
+    for day_items in grouped.values():
+        for item in day_items:
+            item["layout"] = layout_name(item["name"], format_market_cap(item["market_cap"]),
+                                         font(9.5), font(9.5), width - 2 * COLUMN_INSET)
     content_height = max(day_content_height(grouped[day], hidden.get(day, 0)) for day in DAY_LABELS)
     column_height = DAY_HEADER_HEIGHT + content_height + COLUMN_PADDING
     fig, ax = canvas(CARD_WIDTH, TOP + column_height + FOOTER_HEIGHT)
@@ -202,7 +233,6 @@ def draw_card(grouped, monday, hidden=None, out_path=OUTPUT_FILE):
     label(ax, CARD_WIDTH - MARGIN, 0.40, f"{monday.strftime('%b %d')} – {friday.strftime('%b %d, %Y')}",
           font(13), MUTED, ha="right")
 
-    width = (CARD_WIDTH - 2 * MARGIN - COLUMN_GAP * (len(DAY_LABELS) - 1)) / len(DAY_LABELS)
     for i, day in enumerate(DAY_LABELS):
         draw_day(ax, font, MARGIN + i * (width + COLUMN_GAP), width, column_height,
                  day, monday + timedelta(days=i), grouped[day], hidden.get(day, 0))

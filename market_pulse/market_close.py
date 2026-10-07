@@ -1,4 +1,5 @@
-"""Daily US market close summary for a Chinese-language channel.
+"""US market summary for a Chinese-language channel: posted after each close,
+and on demand as the reply to the /market slash command.
 
 One image in Chinese: index tiles with intraday sparklines, a sector heat map
 and macro tiles with 52-week ranges. The message text is just the session date.
@@ -7,11 +8,15 @@ Usage:
     python -m market_pulse.market_close
 
 Set DRY_RUN=true to fetch and render without posting.
+
+On demand: with DISCORD_APPLICATION_ID and INTERACTION_TOKEN set, the summary
+is rendered whatever the time of day, labelled with the session status, and
+sent as the reply to that slash-command interaction instead of to the webhook.
 """
 
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, time as clock, timedelta, timezone
 from pathlib import Path
 
 import matplotlib
@@ -21,11 +26,13 @@ import matplotlib.patches as mpatches
 from matplotlib.transforms import Bbox
 import requests
 
-from market_pulse.discord import post_webhook
+from market_pulse.discord import edit_interaction_response, post_webhook
 from market_pulse.theme import BG, GREEN, MUTED, PANEL, RED, RULE, TEXT, Fonts, blend, tile
 
 WEBHOOK_ENV = "DISCORD_WEBHOOK_URL_MARKET"
 DRY_RUN = os.environ.get("DRY_RUN", "false").lower() in ("1", "true", "yes")
+APPLICATION_ID_ENV = "DISCORD_APPLICATION_ID"
+INTERACTION_TOKEN_ENV = "INTERACTION_TOKEN"
 
 # Yahoo Finance's chart endpoint: closes for up to 20 symbols per request.
 SPARK_URL = "https://query1.finance.yahoo.com/v8/finance/spark"
@@ -209,6 +216,35 @@ def market_traded_today(quotes, now=None):
     return now - sp500["bar_ts"] < MAX_BAR_AGE_SECONDS
 
 
+def new_york_time(utc_now):
+    """Convert an aware UTC datetime to New York wall-clock time (naive).
+
+    US daylight time runs from the second Sunday of March to the first Sunday
+    of November, switching at 2 am local. Computed here rather than through a
+    time zone database so that it behaves the same on every machine.
+    """
+    def nth_sunday(year, month, n):
+        first = datetime(year, month, 1)
+        return first + timedelta(days=(6 - first.weekday()) % 7 + 7 * (n - 1))
+
+    standard = utc_now.replace(tzinfo=None) - timedelta(hours=5)
+    dst_start = nth_sunday(standard.year, 3, 2) + timedelta(hours=2)
+    dst_end = nth_sunday(standard.year, 11, 1) + timedelta(hours=1)  # 2 am daylight = 1 am standard
+    return standard + timedelta(hours=1) if dst_start <= standard < dst_end else standard
+
+
+def session_status(session_date, utc_now=None):
+    """How the newest S&P 500 session relates to now, for the on-demand summary."""
+    now = new_york_time(utc_now or datetime.now(timezone.utc))
+    if session_date == now.date():
+        if now.time() < clock(16, 0):
+            return f"盘中 {now:%H:%M} 纽约时间"
+        return "已收盘"
+    if now.weekday() < 5 and now.time() < clock(9, 30):
+        return "未开盘 · 上一交易日"
+    return "休市 · 上一交易日"
+
+
 # ============================================================
 # Formatting
 # ============================================================
@@ -257,12 +293,12 @@ def breadth(rows):
 # Discord embed
 # ============================================================
 
-def build_embed(quotes, session_date, image_name):
+def build_embed(quotes, session_date, image_name, title="美股收盘"):
     """The image carries all the numbers; the embed only captions it with the date, in small text."""
     sp500 = quotes.get("^GSPC")
     return {
         # Description rather than title: regular-size text instead of a bold heading.
-        "description": f"美股收盘 · {format_date(session_date)}",
+        "description": f"{title} · {format_date(session_date)}",
         "color": int(change_color(sp500["change_pct"] if sp500 else 0).lstrip("#"), 16),
         "image": {"url": f"attachment://{image_name}"},
     }
@@ -378,14 +414,15 @@ def grid(left, right, columns, gap):
     return [left + i * (width + gap) for i in range(columns)], width
 
 
-def draw_card(quotes, intraday, ranges, session_date, out_path=OUTPUT_FILE):
+def draw_card(quotes, intraday, ranges, session_date, out_path=OUTPUT_FILE, status=None):
     font = Fonts()
     fig = plt.figure(figsize=(12, 10.4))
     fig.patch.set_facecolor(BG)
     left, right, gap = 0.03, 0.97, 0.012
 
     # Header
-    fig.text(left, 0.938, format_date(session_date), fontproperties=font(13), color=MUTED, ha="left", va="center")
+    header = format_date(session_date) + (f" · {status}" if status else "")
+    fig.text(left, 0.938, header, fontproperties=font(13), color=MUTED, ha="left", va="center")
 
     # Indices: one tile each, with the session's intraday path
     xs, width = grid(left, right, len(INDICES), gap)
@@ -425,8 +462,12 @@ def draw_card(quotes, intraday, ranges, session_date, out_path=OUTPUT_FILE):
 # ============================================================
 
 def main():
-    if not DRY_RUN:
-        os.environ[WEBHOOK_ENV]  # fail fast on missing configuration
+    interaction_token = os.environ.get(INTERACTION_TOKEN_ENV, "")
+    on_demand = bool(interaction_token)
+    if on_demand:
+        os.environ[APPLICATION_ID_ENV]  # fail fast on missing configuration
+    elif not DRY_RUN:
+        os.environ[WEBHOOK_ENV]
 
     quotes = load_quotes()
     missing = [symbol for symbol in ALL_SYMBOLS if symbol not in quotes]
@@ -435,27 +476,38 @@ def main():
     if "^GSPC" not in quotes or len(missing) > len(ALL_SYMBOLS) // 2:
         raise RuntimeError("Too much quote data is missing, not posting a summary.")
 
-    if not market_traded_today(quotes):
+    # The scheduled post is about today's close; an on-demand one shows
+    # whatever the latest session is, at any time.
+    if not on_demand and not market_traded_today(quotes):
         print("The US market did not trade today, nothing to post.")
         if not DRY_RUN:
             return
 
     session_date = datetime.fromtimestamp(quotes["^GSPC"]["bar_ts"], tz=timezone.utc).date()
-    chart_path = draw_card(quotes, load_intraday(), load_ranges(), session_date)
-    embed = build_embed(quotes, session_date, chart_path.name)
+    status = session_status(session_date) if on_demand else None
+    chart_path = draw_card(quotes, load_intraday(), load_ranges(), session_date, status=status)
 
     if DRY_RUN:
         print(f"[dry run] {session_date}: rendered {chart_path} with {len(quotes)}/{len(ALL_SYMBOLS)} quotes")
         return
 
-    post_webhook(
-        os.environ[WEBHOOK_ENV],
-        {"embeds": [embed], "allowed_mentions": {"parse": []}},
-        file=(chart_path.name, chart_path.read_bytes()),
-        timeout=60,
-    )
+    if on_demand:
+        embed = build_embed(quotes, session_date, chart_path.name, title=f"美股行情 · {status}")
+        edit_interaction_response(
+            os.environ[APPLICATION_ID_ENV], interaction_token,
+            {"embeds": [embed], "allowed_mentions": {"parse": []}},
+            file=(chart_path.name, chart_path.read_bytes()),
+        )
+    else:
+        embed = build_embed(quotes, session_date, chart_path.name)
+        post_webhook(
+            os.environ[WEBHOOK_ENV],
+            {"embeds": [embed], "allowed_mentions": {"parse": []}},
+            file=(chart_path.name, chart_path.read_bytes()),
+            timeout=60,
+        )
     chart_path.unlink(missing_ok=True)
-    print(f"Posted market close summary for {session_date}.")
+    print(f"Posted market summary for {session_date}" + (f" ({status})." if status else "."))
 
 
 if __name__ == "__main__":

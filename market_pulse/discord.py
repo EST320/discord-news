@@ -47,3 +47,28 @@ def post_webhook(webhook_url, payload=None, file=None, *, session=None, timeout=
             time.sleep(retry_after + 1)
 
     raise RuntimeError(f"Discord returned 429 {MAX_RETRIES} times in a row, giving up on this message")
+
+
+INTERACTION_URL = "https://discord.com/api/v10/webhooks/{application_id}/{token}/messages/@original"
+
+
+def edit_interaction_response(application_id, token, payload, file=None, *, timeout=60):
+    """Fill in the deferred reply to a slash command.
+
+    After a command is acknowledged with a "thinking" placeholder, Discord
+    accepts edits to that message for 15 minutes through the interaction
+    token. file is an optional (filename, bytes) PNG attachment.
+    """
+    url = INTERACTION_URL.format(application_id=application_id, token=token)
+    if file is None:
+        response = requests.patch(url, json=payload, timeout=timeout)
+    else:
+        filename, content = file
+        body = {**payload, "attachments": [{"id": 0, "filename": filename}]}
+        response = requests.patch(
+            url,
+            data={"payload_json": json.dumps(body, ensure_ascii=False)},
+            files={"files[0]": (filename, content, "image/png")},
+            timeout=timeout,
+        )
+    response.raise_for_status()

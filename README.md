@@ -64,6 +64,8 @@ market-pulse-discord/
 │   ├── weekly-calendars.yml                  # Weekly earnings calendar, then IPO calendar
 │   ├── market-close.yml                      # Daily US market close summary
 │   ├── backfill.yml                          # Manual backfill
+│   ├── market-now.yml                        # /market slash command: summary on demand
+│   ├── register-commands.yml                 # One-off: register the slash commands
 │   └── tests.yml                             # Unit tests on code changes
 ├── market_pulse/
 │   ├── wallstreetcn.py                       # One module, three channels
@@ -79,6 +81,9 @@ market-pulse-discord/
 │   ├── fonts.py                              # Finds a Chinese-capable font for chart text
 │   ├── theme.py                              # Shared dark palette and helpers for chart images
 │   └── paths.py                              # Repo-relative state/ and assets/ paths
+├── bot/
+│   ├── worker.js                             # Cloudflare Worker that receives slash commands
+│   └── register_commands.py                  # Registers the slash commands with Discord
 ├── scripts/
 │   ├── save_state.sh                         # Publishes state files to the state branch
 │   └── inspect_wallstreetcn_tags.py          # Debug helper: dump raw API fields
@@ -141,6 +146,31 @@ Each workflow checks out `main` for the code and the [`state`](https://github.co
 - **Why a single commit.** The save script takes the tree currently on the remote, replaces only the files its tracker owns, wraps the result in a parentless commit and swaps it in with `git push --force-with-lease`. The branch therefore never grows, and a tracker that loses the race simply retries on top of the new tree.
 - **Cost.** There is no state history to look back through; the Actions run logs are the record of what each run did.
 - **Next step.** If this grows further, state moves to SQLite or a key-value store.
+
+## Slash command: `/market`
+
+Typing `/market` in Discord returns the same image as the market close post, drawn from current data and labelled with the session status (in session with the New York time, closed, or showing the previous session before the open and on weekends and holidays).
+
+Everything else here only pushes messages out through webhooks. A command is a request coming in, so something has to be listening for it:
+
+```text
+/market in Discord
+  → Discord POSTs the interaction to a Cloudflare Worker (bot/worker.js)
+  → the Worker verifies Discord's signature, answers "thinking..." within the 3-second limit,
+    and dispatches market-now.yml with the interaction token
+  → the workflow draws the summary and edits it into the placeholder
+```
+
+The reply takes roughly half a minute to a minute, almost all of it the runner starting up; the trade-off is that nothing has to be kept running and both services are free.
+
+Setup:
+
+1. Create an application in the Discord Developer Portal, add a bot to it, and invite it to the server with the `applications.commands` scope.
+2. Add the repository secrets `DISCORD_APPLICATION_ID` and `DISCORD_BOT_TOKEN`, then run the **Register Discord Commands** workflow once.
+3. Create a Cloudflare Worker, paste in `bot/worker.js`, and set its variables: `DISCORD_PUBLIC_KEY` and `GITHUB_TOKEN` (a fine-grained token with Actions read and write on this repository) as secrets, `GITHUB_REPO` as `owner/name`, and optionally `ALLOWED_GUILD_ID` to restrict the command to one server.
+4. Put the Worker's URL in the application's **Interactions Endpoint URL**. Discord checks the signature handling before accepting it.
+
+The interaction token passed to the workflow can edit that one reply for 15 minutes. The workflow reads it from the event payload and masks it, so it does not appear in this public repository's logs.
 
 ## State file format
 
@@ -253,6 +283,7 @@ git worktree add state state
 | `DISCORD_WEBHOOK_URL_MARKET` | Market close channel. Optional: shares the Fear & Greed channel when unset |
 | `DISCORD_WEBHOOK_URL_IPO` | IPO calendar channel. Optional: shares the earnings calendar channel when unset |
 | `DEEPL_API_KEY` | DeepL translation |
+| `DISCORD_APPLICATION_ID`, `DISCORD_BOT_TOKEN` | Only for registering the `/market` slash command |
 
 ## Known limitations and roadmap
 

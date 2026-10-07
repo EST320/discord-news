@@ -83,6 +83,7 @@ market-pulse-discord/
 │   └── paths.py                              # Repo-relative state/ and assets/ paths
 ├── bot/
 │   ├── worker.js                             # Cloudflare Worker that receives slash commands
+│   ├── wrangler.toml                         # Its deployment configuration
 │   └── register_commands.py                  # Registers the slash commands with Discord
 ├── scripts/
 │   ├── save_state.sh                         # Publishes state files to the state branch
@@ -167,7 +168,7 @@ Setup:
 
 1. Create an application in the Discord Developer Portal, add a bot to it, and invite it to the server with the `applications.commands` scope.
 2. Add the repository secrets `DISCORD_APPLICATION_ID` and `DISCORD_BOT_TOKEN`, then run the **Register Discord Commands** workflow once.
-3. Create a Cloudflare Worker, paste in `bot/worker.js`, and set its variables: `DISCORD_PUBLIC_KEY` and `GITHUB_TOKEN` (a fine-grained token with Actions read and write on this repository) as secrets, `GITHUB_REPO` as `owner/name`, and optionally `ALLOWED_GUILD_ID` to restrict the command to one server.
+3. Create a Cloudflare Worker from this repository (Workers & Pages → Create → import a repository) with **`bot` as the root directory** and preview builds turned off; `bot/wrangler.toml` supplies the rest, and later pushes redeploy it. Then add its secrets `DISCORD_PUBLIC_KEY` and `GITHUB_TOKEN` (a fine-grained token with Actions read and write on this repository), and optionally a text variable `ALLOWED_GUILD_ID` to restrict the command to one server.
 4. Put the Worker's URL in the application's **Interactions Endpoint URL**. Discord checks the signature handling before accepting it.
 
 The interaction token passed to the workflow can edit that one reply for 15 minutes. The workflow reads it from the event payload and masks it, so it does not appear in this public repository's logs.

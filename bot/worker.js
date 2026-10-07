@@ -11,7 +11,7 @@
 // Settings (Worker -> Settings -> Variables and Secrets):
 //   DISCORD_PUBLIC_KEY   secret  the application's public key
 //   GITHUB_TOKEN         secret  fine-grained token with Actions read/write on the repository
-//   GITHUB_REPO          text    owner/name, e.g. EST320/market-pulse-discord
+//   GITHUB_REPO          text    owner/name; set in wrangler.toml
 //   ALLOWED_GUILD_ID     text    optional: only this server may use the command
 
 const PING = 1;

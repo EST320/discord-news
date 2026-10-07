@@ -1,0 +1,17 @@
+# Cloudflare Worker configuration for the /market slash command endpoint.
+# Deployed by Cloudflare's Git integration with "bot" as the root directory:
+# every push to main that touches this folder redeploys the Worker.
+name = "market-pulse-discord"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+
+# Keep variables added in the Cloudflare dashboard (such as ALLOWED_GUILD_ID)
+# instead of deleting whatever is not listed here on each deploy.
+keep_vars = true
+
+[vars]
+GITHUB_REPO = "EST320/market-pulse-discord"
+
+# Request logs in the dashboard, for debugging a command that gets no reply.
+[observability]
+enabled = true

@@ -1,0 +1,33 @@
+name: Nasdaq API Check
+
+# Connectivity check for the Nasdaq calendar API from a GitHub runner.
+# Reads a few calendar pages and posts nothing; needs no secrets or quota.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "market_pulse/nasdaq.py"
+      - ".github/workflows/nasdaq-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements/base.txt
+
+      - name: Request the earnings and IPO calendars
+        run: python -m market_pulse.nasdaq

@@ -22,9 +22,9 @@ In production since July 2026.
 | [`wallstreetcn`](market_pulse/wallstreetcn.py) | Wallstreetcn live feed: US, A-share and HK channels | Headline + body | Every 2 minutes per channel |
 | [`truth_social`](market_pulse/truth_social.py) | CNN's public Truth Social archive | Chinese translation + card image of the original post | Every 5 minutes |
 | [`fear_greed`](market_pulse/fear_greed.py) | CNN Fear & Greed Index, alternative.me Crypto Fear & Greed Index | One image with both gauges and their history, plus the change since last run | Scheduled |
-| [`earnings_calendar`](market_pulse/earnings_calendar.py) | Finnhub earnings calendar and company profile APIs | One image of next week's earnings, a column per day | Every Friday |
+| [`earnings_calendar`](market_pulse/earnings_calendar.py) | Finnhub earnings calendar and company profile APIs | One image of next week's earnings, a column per day | Fridays after the US close |
 | [`market_close`](market_pulse/market_close.py) | Yahoo Finance | Chinese-language image: S&P 500, Nasdaq, Dow, Russell 2000 (IWM), semiconductors (SOXX), a heat map of the 11 sectors, VIX, 10-year yield, dollar index, gold, oil, bitcoin | Weekdays, 4:15 pm New York time |
-| [`ipo_calendar`](market_pulse/ipo_calendar.py) | Finnhub IPO calendar API | One image of expected US listings from today through the end of next week, grouped by day | Every Friday |
+| [`ipo_calendar`](market_pulse/ipo_calendar.py) | Finnhub IPO calendar API | One image of expected US listings from today through the end of next week, grouped by day | Fridays, right after the earnings calendar |
 | [`backfill`](market_pulse/backfill.py) | Wallstreetcn (all three channels) | Flash news missed during an outage window | Manual |
 
 The Wallstreetcn feed is Chinese, and Truth Social posts are translated into Chinese, so most of the Discord output is Chinese-language. Code, logs and documentation are in English.
@@ -57,8 +57,7 @@ market-pulse-discord/
 │   ├── news.yml / news-a.yml / news-hk.yml   # Wallstreetcn US / A-share / HK
 │   ├── news-trump.yml                        # Truth Social
 │   ├── feargreed.yml                         # Fear & Greed indices
-│   ├── news-earnings.yml                     # Weekly earnings calendar
-│   ├── ipo-calendar.yml                      # Weekly IPO calendar
+│   ├── weekly-calendars.yml                  # Weekly earnings calendar, then IPO calendar
 │   ├── market-close.yml                      # Daily US market close summary
 │   ├── backfill.yml                          # Manual backfill
 │   └── tests.yml                             # Unit tests on code changes
@@ -192,7 +191,8 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 
 ### IPO calendar
 
-- Runs alongside the earnings calendar and covers today through next week's Friday. IPO dates are usually fixed only a week or so ahead, so a next-week-only window would often be empty.
+- Posted by the same workflow run as the earnings calendar, as a second message in the same channel. The two are separate steps, so one failing does not stop the other.
+- Covers today through next week's Friday. IPO dates are usually fixed only a week or so ahead, so a next-week-only window would often be empty.
 - When nothing is scheduled it posts a one-line note saying so, so that an empty week cannot be mistaken for a failed run.
 - Shows deals Finnhub marks as expected or priced; filed-only and withdrawn deals are left out.
 - One row per deal in the shared dark theme, grouped under its date and sorted by deal size, capped at 25 rows. Each row shows the ticker, company, exchange, price range, shares offered and deal size.

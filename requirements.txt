@@ -3,4 +3,4 @@
 -r requirements/truth_social.txt
 -r requirements/fear_greed.txt
 -r requirements/market_close.txt
--r requirements/earnings.txt
+-r requirements/calendars.txt

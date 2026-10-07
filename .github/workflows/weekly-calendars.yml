@@ -1,0 +1,57 @@
+name: Weekly Calendars to Discord
+
+# Posts next week's earnings calendar, then the IPO calendar, to the same
+# channel. Triggered by the external scheduler once a week, after Friday's
+# US close (see README, "Triggering").
+on:
+  workflow_dispatch:
+  # A change to either tracker triggers a dry run: fetch and render, post nothing.
+  push:
+    branches: [main]
+    paths:
+      - "market_pulse/earnings_calendar.py"
+      - "market_pulse/ipo_calendar.py"
+      - "market_pulse/theme.py"
+      - "market_pulse/fonts.py"
+      - "requirements/calendars.txt"
+      - ".github/workflows/weekly-calendars.yml"
+
+permissions:
+  contents: read
+
+env:
+  FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+  DRY_RUN: ${{ github.event_name == 'push' }}
+
+jobs:
+  post-calendars:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The charts share the market close image's typeface, which needs a CJK font.
+      - name: Install chart font
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
+
+      - name: Install dependencies
+        run: pip install -r requirements/calendars.txt
+
+      - name: Post earnings calendar
+        env:
+          DISCORD_WEBHOOK_URL_EARNINGS: ${{ secrets.DISCORD_WEBHOOK_URL_EARNINGS }}
+        run: python -m market_pulse.earnings_calendar
+
+      # Runs even if the earnings step failed, so one calendar cannot block the other.
+      - name: Post IPO calendar
+        if: ${{ !cancelled() }}
+        env:
+          # Shares the earnings calendar channel unless a dedicated webhook is set.
+          DISCORD_WEBHOOK_URL_IPO: ${{ secrets.DISCORD_WEBHOOK_URL_IPO || secrets.DISCORD_WEBHOOK_URL_EARNINGS }}
+        run: python -m market_pulse.ipo_calendar

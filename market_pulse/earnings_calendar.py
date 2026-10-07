@@ -9,7 +9,7 @@ Set DRY_RUN=true to fetch and render without posting.
 import os
 from datetime import datetime, timedelta, timezone
 
-from market_pulse import nasdaq
+from market_pulse import nasdaq, yahoo
 from market_pulse.discord import post_webhook
 from market_pulse.theme import (
     AMBER, GREEN, INDIGO, MUTED, RED, RULE, Fonts, box, canvas, label, save, text_width, wrap,
@@ -22,11 +22,20 @@ OUTPUT_FILE = "earnings_calendar.png"
 
 DAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri")
 
-# Which companies make the card. In a quiet week the floor decides; at the
-# peak of earnings season, when 80+ companies above the floor can report on
-# one day, the per-day limit keeps only the largest.
-MIN_MARKET_CAP = 20_000_000_000
+# Which companies make the card: the most actively traded, not the largest.
+# Ranking by average daily dollar volume keeps closely followed mid caps
+# (Coinbase, MicroStrategy) and drops large caps that barely trade in the US
+# (Shell, TotalEnergies, AB InBev). The market-cap floor only keeps out small
+# stocks having one wild month.
+MIN_MARKET_CAP = 5_000_000_000
 MAX_COMPANIES_PER_DAY = 12
+DOLLAR_VOLUME_DAYS = 20
+# In a quiet week fewer than 12 companies report on a day, so the per-day
+# limit never bites; this floor is what keeps thinly traded names off then.
+MIN_DOLLAR_VOLUME = 200_000_000
+# The 20-day average costs one request per company, so each day is first cut
+# down to this many candidates using a single session's volume.
+SHORTLIST_PER_DAY = 30
 
 # Reporting session -> (heading, accent colour), in display order.
 SESSIONS = {
@@ -69,27 +78,75 @@ def get_next_week_range(today=None):
 # Data
 # ============================================================
 
-def select_companies(companies):
-    """The day's largest companies above the floor, and how many more were left out.
+def eligible_companies(companies):
+    return [c for c in companies if c["market_cap"] >= MIN_MARKET_CAP]
 
-    Returns (shown, hidden): shown is at most MAX_COMPANIES_PER_DAY items,
-    largest first; hidden counts the other companies that cleared the floor.
+
+def shortlist(companies, one_day_volume):
+    """The day's candidates for the 20-day lookup: the most traded in the latest session.
+
+    Without any volume data (the screener request failed) it falls back to the largest.
     """
-    eligible = sorted(
-        (c for c in companies if c["market_cap"] >= MIN_MARKET_CAP),
-        key=lambda c: c["market_cap"],
+    ranked = sorted(
+        eligible_companies(companies),
+        key=lambda c: (one_day_volume.get(c["symbol"], 0.0), c["market_cap"]),
         reverse=True,
     )
-    shown = [{**c, "ticker": f"${c['symbol']}"} for c in eligible[:MAX_COMPANIES_PER_DAY]]
+    return ranked[:SHORTLIST_PER_DAY]
+
+
+def select_companies(companies, average_volume, one_day_volume=None):
+    """The day's most actively traded companies, and how many others cleared the cap floor.
+
+    Returns (shown, hidden). shown holds at most MAX_COMPANIES_PER_DAY items,
+    most traded first, each with its "dollar_volume". A company's 20-day
+    average is used when known and the latest session's volume otherwise.
+    Companies known to trade less than MIN_DOLLAR_VOLUME a day are left out.
+    A company with no volume data at all is kept and ranked last by market
+    cap, so that losing the volume sources degrades to a largest-first list
+    instead of an empty one.
+    """
+    one_day_volume = one_day_volume or {}
+    eligible = eligible_companies(companies)
+
+    def activity(company):
+        symbol = company["symbol"]
+        return average_volume.get(symbol) or one_day_volume.get(symbol, 0.0)
+
+    ranked = sorted(
+        (c for c in eligible if not 0 < activity(c) < MIN_DOLLAR_VOLUME),
+        key=lambda c: (activity(c), c["market_cap"]),
+        reverse=True,
+    )
+    shown = [
+        {**c, "ticker": f"${c['symbol']}", "dollar_volume": activity(c)}
+        for c in ranked[:MAX_COMPANIES_PER_DAY]
+    ]
     return shown, len(eligible) - len(shown)
 
 
 def load_week(monday):
     """Fetch Monday to Friday. Returns ({day: [company, ...]}, {day: hidden count})."""
+    try:
+        one_day_volume = nasdaq.fetch_dollar_volumes()
+    except Exception as exc:
+        print(f"Volume screener unavailable, shortlisting by market cap instead: {exc!r}")
+        one_day_volume = {}
+
+    by_day = {
+        day: nasdaq.fetch_earnings(monday + timedelta(days=offset))
+        for offset, day in enumerate(DAY_LABELS)
+    }
+    candidates = {c["symbol"] for companies in by_day.values() for c in shortlist(companies, one_day_volume)}
+    average_volume = yahoo.average_dollar_volumes(sorted(candidates), DOLLAR_VOLUME_DAYS)
+    print(f"{DOLLAR_VOLUME_DAYS}-day dollar volume found for {len(average_volume)} of {len(candidates)} candidates")
+
     grouped, hidden = {}, {}
-    for offset, day in enumerate(DAY_LABELS):
-        companies = nasdaq.fetch_earnings(monday + timedelta(days=offset))
-        grouped[day], hidden[day] = select_companies(companies)
+    for day, companies in by_day.items():
+        candidates_today = shortlist(companies, one_day_volume)
+        shown, _ = select_companies(candidates_today, average_volume, one_day_volume)
+        grouped[day] = shown
+        hidden[day] = len(eligible_companies(companies)) - len(shown)
     return grouped, hidden
 
 
@@ -173,8 +230,8 @@ def draw_company(ax, font, y, left, right, item):
             label(ax, right, upper + 0.005, arrow, arrow_font, GREEN if trend > 0 else RED, ha="right")
         label(ax, eps_right, upper, f"est {format_eps(item['eps_forecast'])}", font(10), MUTED, ha="right")
 
-    # Below: the full company name, wrapped, with the market cap the day is
-    # sorted by at the end of its last line (or on its own line if it won't fit).
+    # Below: the full company name, wrapped, with the market cap at the end of
+    # its last line (or on its own line if it won't fit).
     lines, cap_inline = item.get("layout") or ([item["name"]], True)
     for i, line in enumerate(lines):
         label(ax, left, lower + i * NAME_LINE_HEIGHT, line, font(9.5), MUTED)
@@ -208,7 +265,7 @@ def draw_day(ax, font, x, width, height, day, date, day_items, hidden):
             y += row_height(item)
 
     if hidden:
-        label(ax, inner_left, y + MORE_HEIGHT / 2, f"+{hidden} more above {format_market_cap(MIN_MARKET_CAP)}",
+        label(ax, inner_left, y + MORE_HEIGHT / 2, f"+{hidden} less traded above {format_market_cap(MIN_MARKET_CAP)}",
               font(9.5), MUTED)
 
 
@@ -240,7 +297,8 @@ def draw_card(grouped, monday, hidden=None, out_path=OUTPUT_FILE):
     footer_y = TOP + column_height + FOOTER_HEIGHT / 2
     label(ax, MARGIN, footer_y, "est = consensus EPS · ▲▼ vs. the same quarter last year", font(10), MUTED)
     label(ax, CARD_WIDTH - MARGIN, footer_y,
-          f"Top {MAX_COMPANIES_PER_DAY} per day above {format_market_cap(MIN_MARKET_CAP)} market cap · Data: Nasdaq",
+          f"Most actively traded, up to {MAX_COMPANIES_PER_DAY} a day ({DOLLAR_VOLUME_DAYS}-day avg. dollar volume) · "
+          "Data: Nasdaq, Yahoo Finance",
           font(10), MUTED, ha="right")
 
     save(fig, out_path)

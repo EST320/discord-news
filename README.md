@@ -26,7 +26,7 @@ In production since July 2026.
 | [`wallstreetcn`](market_pulse/wallstreetcn.py) | Wallstreetcn live feed: US, A-share and HK channels | Headline + body | Every 2 minutes per channel |
 | [`truth_social`](market_pulse/truth_social.py) | CNN's public Truth Social archive | Chinese translation + card image of the original post | Every 5 minutes |
 | [`fear_greed`](market_pulse/fear_greed.py) | CNN Fear & Greed Index, alternative.me Crypto Fear & Greed Index | One image with both gauges and their history, plus the change since last run | Scheduled |
-| [`earnings_calendar`](market_pulse/earnings_calendar.py) | Nasdaq's public calendar API | One image of next week's earnings, a column per day, with market cap and consensus EPS | Fridays after the US close |
+| [`earnings_calendar`](market_pulse/earnings_calendar.py) | Nasdaq's public calendar API, Yahoo Finance | One image of next week's most actively traded reporters, a column per day, with market cap and consensus EPS | Fridays after the US close |
 | [`market_close`](market_pulse/market_close.py) | Yahoo Finance | Chinese-language image: S&P 500, Nasdaq, Dow, Russell 2000 (IWM), semiconductors (SOXX), a heat map of the 11 sectors, VIX, 10-year yield, dollar index, gold, oil, bitcoin | Weekdays, 4:15 pm New York time |
 | [`ipo_calendar`](market_pulse/ipo_calendar.py) | Nasdaq's public calendar API | One image of the US IPOs expected to price from today through the end of next week, grouped by day | Fridays, right after the earnings calendar |
 | [`backfill`](market_pulse/backfill.py) | Wallstreetcn (all three channels) | Flash news missed during an outage window | Manual |
@@ -75,6 +75,7 @@ market-pulse-discord/
 │   ├── market_close.py
 │   ├── discord.py                            # Shared webhook client with bounded 429 retries
 │   ├── nasdaq.py                             # Client for Nasdaq's public calendar API
+│   ├── yahoo.py                              # 20-day average dollar volume from Yahoo Finance
 │   ├── fonts.py                              # Finds a Chinese-capable font for chart text
 │   ├── theme.py                              # Shared dark palette and helpers for chart images
 │   └── paths.py                              # Repo-relative state/ and assets/ paths
@@ -180,7 +181,9 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 
 - Runs on Fridays and covers Monday to Friday of the **following** week, leaving a week to prepare.
 - Data comes from the public API behind nasdaq.com's earnings calendar: five requests a week, no key, and market cap, reporting time and consensus EPS in the same response.
-- Shows the 12 largest companies per day above a USD 20 billion market cap. In a quiet week the floor is what limits the list; at the peak of earnings season, when more than 80 companies above the floor can report on a single day, the per-day limit does, and a line under the column says how many more were left out.
+- Companies are chosen by how actively they trade, not by size: each day shows up to 12 companies ranked by 20-day average daily dollar volume. That keeps closely followed mid caps (Coinbase, Robinhood, MicroStrategy) and drops large caps that barely trade in the US (Shell, TotalEnergies, AB InBev). The 20-day average smooths out one-off spikes.
+- Two floors apply: a USD 5 billion market cap, and USD 200 million of average daily dollar volume, which is what filters a quiet week when fewer than 12 companies report on a day. A line under each column says how many others above the cap floor were left out.
+- The 20-day average costs one Yahoo Finance request per company, so each day is first cut to 30 candidates using a single session's volume from Nasdaq's stock screener (one request for the whole market). If the volume sources are unavailable, the list falls back to the largest companies.
 - Each company shows its consensus EPS estimate with an arrow for whether that is above or below the same quarter last year.
 - Company names are always shown in full, wrapped onto a second or third line when needed, so rows vary in height.
 - One column per weekday in the shared dark theme. Each day is split into Before Open and After Close, largest market cap first, with the cap shown next to every ticker.

@@ -40,40 +40,96 @@ class NextWeekRangeTest(unittest.TestCase):
 
 
 class SelectCompaniesTest(unittest.TestCase):
-    def test_floor_drops_small_companies_and_largest_come_first(self):
-        shown, hidden = ec.select_companies([company("MID", 50), company("SMALL", 19.9), company("BIG", 500)])
-        self.assertEqual([c["ticker"] for c in shown], ["$BIG", "$MID"])
+    MILLION = 1_000_000
+
+    def volumes(self, **billions):
+        return {symbol: value * BILLION for symbol, value in billions.items()}
+
+    def test_ranks_by_trading_activity_not_by_size(self):
+        companies = [company("SHEL", 263), company("COIN", 50), company("AAPL", 4900)]
+        shown, hidden = ec.select_companies(companies, self.volumes(SHEL=0.7, COIN=1.8, AAPL=13.9))
+        self.assertEqual([c["ticker"] for c in shown], ["$AAPL", "$COIN", "$SHEL"])
+        self.assertEqual(shown[1]["dollar_volume"], 1.8 * BILLION)
         self.assertEqual(hidden, 0)
 
-    def test_floor_is_inclusive(self):
-        shown, _ = ec.select_companies([company("EDGE", ec.MIN_MARKET_CAP / BILLION)])
-        self.assertEqual(len(shown), 1)
+    def test_market_cap_floor(self):
+        companies = [company("SMALL", 4.9), company("EDGE", ec.MIN_MARKET_CAP / BILLION)]
+        shown, hidden = ec.select_companies(companies, self.volumes(SMALL=9, EDGE=1))
+        self.assertEqual([c["ticker"] for c in shown], ["$EDGE"])
+        self.assertEqual(hidden, 0)
 
-    def test_busy_day_keeps_the_largest_and_counts_the_rest(self):
-        companies = [company(f"S{i}", 100 + i) for i in range(40)] + [company("TINY", 1)]
-        shown, hidden = ec.select_companies(companies)
+    def test_thinly_traded_companies_are_left_out_even_in_a_quiet_week(self):
+        companies = [company("JPM", 884), company("HOMB", 5.5), company("BUD", 148)]
+        volume = {"JPM": 2.9 * BILLION, "HOMB": 30 * self.MILLION, "BUD": ec.MIN_DOLLAR_VOLUME - 1}
+        shown, hidden = ec.select_companies(companies, volume)
+        self.assertEqual([c["ticker"] for c in shown], ["$JPM"])
+        self.assertEqual(hidden, 2)
+
+    def test_busy_day_keeps_the_most_traded_and_counts_the_rest(self):
+        companies = [company(f"S{i}", 100) for i in range(40)]
+        volume = {f"S{i}": (i + 1) * BILLION for i in range(40)}
+        shown, hidden = ec.select_companies(companies, volume)
         self.assertEqual(len(shown), ec.MAX_COMPANIES_PER_DAY)
         self.assertEqual(shown[0]["ticker"], "$S39")
         self.assertEqual(hidden, 40 - ec.MAX_COMPANIES_PER_DAY)
 
-    def test_week_is_fetched_one_day_at_a_time(self):
-        def fake_fetch(day):
-            return [company("ONLY", 100)] if day == date(2026, 10, 13) else []
+    def test_latest_session_volume_stands_in_for_a_missing_average(self):
+        companies = [company("AVG", 50), company("ONEDAY", 50)]
+        shown, _ = ec.select_companies(companies, self.volumes(AVG=1.0), self.volumes(AVG=9.0, ONEDAY=2.0))
+        self.assertEqual([(c["ticker"], c["dollar_volume"]) for c in shown],
+                         [("$ONEDAY", 2.0 * BILLION), ("$AVG", 1.0 * BILLION)])
 
-        with mock.patch.object(ec.nasdaq, "fetch_earnings", side_effect=fake_fetch) as fetch:
+    def test_without_any_volume_data_it_falls_back_to_the_largest(self):
+        shown, hidden = ec.select_companies([company("MID", 50), company("BIG", 500), company("TINY", 1)], {})
+        self.assertEqual([c["ticker"] for c in shown], ["$BIG", "$MID"])
+        self.assertEqual(hidden, 0)
+
+    def test_shortlist_uses_one_session_of_volume_then_size(self):
+        companies = [company(f"S{i}", 100 + i) for i in range(50)] + [company("TINY", 1)]
+        by_volume = ec.shortlist(companies, {"S0": 5 * BILLION, "S1": 9 * BILLION})
+        self.assertEqual(len(by_volume), ec.SHORTLIST_PER_DAY)
+        self.assertEqual([c["symbol"] for c in by_volume[:3]], ["S1", "S0", "S49"])
+        self.assertEqual(ec.shortlist(companies, {})[0]["symbol"], "S49")
+
+
+class LoadWeekTest(unittest.TestCase):
+    def load(self, screener):
+        def fake_earnings(day):
+            if day == date(2026, 10, 13):
+                return [company("HOT", 50), company("COLD", 300), company("TINY", 1)]
+            return []
+
+        patches = (
+            mock.patch.object(ec.nasdaq, "fetch_earnings", side_effect=fake_earnings),
+            mock.patch.object(ec.nasdaq, "fetch_dollar_volumes", **screener),
+            mock.patch.object(ec.yahoo, "average_dollar_volumes",
+                              return_value={"HOT": 3 * BILLION, "COLD": 0.5 * BILLION}),
+            mock.patch("builtins.print"),
+        )
+        with patches[0] as earnings, patches[1], patches[2] as averages, patches[3]:
             grouped, hidden = ec.load_week(MONDAY)
+        return grouped, hidden, earnings, averages
 
-        self.assertEqual([call.args[0] for call in fetch.call_args_list],
+    def test_week_is_fetched_one_day_at_a_time_and_ranked_by_average_volume(self):
+        grouped, hidden, earnings, averages = self.load({"return_value": {"HOT": 1.0, "COLD": 2.0}})
+        self.assertEqual([call.args[0] for call in earnings.call_args_list],
                          [date(2026, 10, d) for d in (12, 13, 14, 15, 16)])
-        self.assertEqual([len(grouped[day]) for day in ec.DAY_LABELS], [0, 1, 0, 0, 0])
-        self.assertEqual(set(hidden.values()), {0})
+        # Only companies above the cap floor are looked up, once each.
+        averages.assert_called_once_with(["COLD", "HOT"], ec.DOLLAR_VOLUME_DAYS)
+        self.assertEqual([c["ticker"] for c in grouped["Tue"]], ["$HOT", "$COLD"])
+        self.assertEqual([len(grouped[day]) for day in ec.DAY_LABELS], [0, 2, 0, 0, 0])
+        self.assertEqual(hidden["Tue"], 0)
+
+    def test_screener_failure_does_not_stop_the_calendar(self):
+        grouped, _, _, _ = self.load({"side_effect": RuntimeError("blocked")})
+        self.assertEqual([c["ticker"] for c in grouped["Tue"]], ["$HOT", "$COLD"])
 
 
 class FormattingTest(unittest.TestCase):
     def test_market_cap_labels(self):
         self.assertEqual(ec.format_market_cap(245 * BILLION), "$245B")
         self.assertEqual(ec.format_market_cap(1200 * BILLION), "$1.2T")
-        self.assertEqual(ec.format_market_cap(ec.MIN_MARKET_CAP), "$20B")
+        self.assertEqual(ec.format_market_cap(ec.MIN_MARKET_CAP), "$5B")
 
     def test_eps_labels(self):
         self.assertEqual(ec.format_eps(5.94), "$5.94")

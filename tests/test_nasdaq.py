@@ -98,6 +98,24 @@ class FetchEarningsTest(unittest.TestCase):
         self.assertEqual(self.fetch(None), [])
 
 
+class FetchDollarVolumesTest(unittest.TestCase):
+    def test_price_times_volume_per_symbol(self):
+        rows = [
+            {"symbol": "COIN", "lastsale": "$300.00", "volume": "5,000,000"},
+            {"symbol": "HALT", "lastsale": "$10.00", "volume": "0"},
+            {"symbol": "", "lastsale": "$1.00", "volume": "10"},
+            {"symbol": "BAD", "lastsale": "N/A", "volume": "10"},
+        ]
+        with mock.patch.object(nasdaq, "get_data", return_value={"rows": rows}) as get_data:
+            volumes = nasdaq.fetch_dollar_volumes()
+        self.assertEqual(get_data.call_args.args[0], "screener/stocks")
+        self.assertEqual(volumes, {"COIN": 1_500_000_000.0})
+
+    def test_empty_screener(self):
+        with mock.patch.object(nasdaq, "get_data", return_value={}):
+            self.assertEqual(nasdaq.fetch_dollar_volumes(), {})
+
+
 class FetchUpcomingIposTest(unittest.TestCase):
     def fetch(self, data):
         with mock.patch.object(nasdaq, "get_data", return_value=data) as get_data:

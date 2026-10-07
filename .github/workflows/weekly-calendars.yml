@@ -13,6 +13,7 @@ on:
       - "market_pulse/earnings_calendar.py"
       - "market_pulse/ipo_calendar.py"
       - "market_pulse/nasdaq.py"
+      - "market_pulse/yahoo.py"
       - "market_pulse/theme.py"
       - "market_pulse/fonts.py"
       - "requirements/calendars.txt"

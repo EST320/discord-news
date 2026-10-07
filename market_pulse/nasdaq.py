@@ -84,6 +84,21 @@ def fetch_earnings(day):
     return companies
 
 
+def fetch_dollar_volumes():
+    """{symbol: last price x volume} for every listed US stock, from one request.
+
+    A single session's trading, so it is noisy; good for shortlisting, not for ranking.
+    """
+    data = get_data("screener/stocks", {"tableonly": "true", "limit": 25, "offset": 0, "download": "true"})
+    volumes = {}
+    for row in data.get("rows") or []:
+        symbol = str(row.get("symbol") or "").strip()
+        price, volume = parse_number(row.get("lastsale")), parse_number(row.get("volume"))
+        if symbol and price and volume:
+            volumes[symbol] = price * volume
+    return volumes
+
+
 def fetch_upcoming_ipos(month):
     """Deals with an expected pricing date in the given month ('YYYY-MM'), as normalised dicts."""
     data = get_data("ipo/calendar", {"date": month})

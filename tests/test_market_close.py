@@ -125,8 +125,8 @@ class FormattingTest(unittest.TestCase):
 
     def test_symbol_lists(self):
         self.assertEqual(len(mc.ALL_SYMBOLS), len(set(mc.ALL_SYMBOLS)))
-        self.assertEqual(len(mc.ALL_SYMBOLS), 22)
-        self.assertEqual(mc.INTRADAY_SYMBOLS, ["^GSPC", "^IXIC", "^DJI", "IWM", "SOXX"])
+        self.assertEqual(len(mc.ALL_SYMBOLS), 23)
+        self.assertEqual(mc.INTRADAY_SYMBOLS, ["^GSPC", "^IXIC", "^DJI", "RSP", "IWM", "SOXX"])
         self.assertEqual(mc.RANGE_SYMBOLS, ["^VIX", "^TNX", "DX-Y.NYB", "GC=F", "CL=F", "BTC-USD"])
 
 

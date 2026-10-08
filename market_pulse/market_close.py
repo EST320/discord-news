@@ -23,7 +23,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from matplotlib.transforms import Bbox
 import requests
 
 from market_pulse.discord import edit_interaction_response, post_webhook
@@ -58,6 +57,7 @@ INDICES = [
     ("^GSPC", "标普500", "S&P 500"),
     ("^IXIC", "纳斯达克", "NASDAQ"),
     ("^DJI", "道琼斯", "DOW"),
+    ("RSP", "标普等权", "RSP"),
     ("IWM", "罗素2000", "IWM"),
     ("SOXX", "半导体", "SOXX"),
 ]
@@ -330,48 +330,53 @@ def draw_sparkline(fig, rect, closes, previous, color):
 
 
 def draw_index_tile(fig, font, rect, name, ticker, quote, closes):
+    """A wide tile: the numbers on the left, the session's intraday path on the right."""
     left, bottom, width, height = rect
     ax = tile(fig, rect)
-    ax.text(0.08, 0.90, name, fontproperties=font(15, bold=True), color=TEXT, ha="left", va="center")
-    ax.text(0.92, 0.90, ticker, fontproperties=font(9.5), color=MUTED, ha="right", va="center")
+    ax.text(0.05, 0.83, name, fontproperties=font(16, bold=True), color=TEXT, ha="left", va="center")
+    ax.text(0.95, 0.83, ticker, fontproperties=font(10), color=MUTED, ha="right", va="center")
     if not quote:
-        ax.text(0.5, 0.5, "暂无数据", fontproperties=font(13), color=MUTED, ha="center", va="center")
+        ax.text(0.5, 0.42, "暂无数据", fontproperties=font(13), color=MUTED, ha="center", va="center")
         return
 
     pct = quote["change_pct"]
     color = change_color(pct)
     ax.add_patch(mpatches.Rectangle((0, 0.965), 1, 0.035, color=color))
-    ax.text(0.08, 0.70, f"{arrow(pct)} {format_pct(pct)}", fontproperties=font(21, bold=True),
+    ax.text(0.05, 0.53, f"{arrow(pct)} {format_pct(pct)}", fontproperties=font(23, bold=True),
             color=color, ha="left", va="center")
-    ax.text(0.08, 0.525, f"{quote['price']:,.2f}", fontproperties=font(13.5, bold=True),
+    ax.text(0.05, 0.27, f"{quote['price']:,.2f}", fontproperties=font(14.5, bold=True),
             color=TEXT, ha="left", va="center")
-    ax.text(0.92, 0.525, f"{quote['change']:+,.2f}", fontproperties=font(11.5),
-            color=color, ha="right", va="center")
+    ax.text(0.05, 0.11, f"{quote['change']:+,.2f}", fontproperties=font(12),
+            color=color, ha="left", va="center")
 
     if closes:
-        draw_sparkline(fig, [left + width * 0.06, bottom + height * 0.07, width * 0.88, height * 0.34],
+        draw_sparkline(fig, [left + width * 0.56, bottom + height * 0.10, width * 0.40, height * 0.58],
                        closes, quote["previous"], color)
 
 
 def draw_sector_tile(fig, font, rect, name, pct):
     ax = tile(fig, rect, heat_color(pct, SECTOR_HEAT_CAP))
-    ax.text(0.5, 0.67, name, fontproperties=font(14, bold=True), color=TEXT, ha="center", va="center")
-    ax.text(0.5, 0.30, f"{arrow(pct)} {format_pct(pct)}", fontproperties=font(15, bold=True),
+    ax.text(0.5, 0.66, name, fontproperties=font(11.5, bold=True), color=TEXT, ha="center", va="center")
+    ax.text(0.5, 0.29, f"{arrow(pct)} {format_pct(pct)}", fontproperties=font(11, bold=True),
             color="#FFFFFF", ha="center", va="center")
 
 
-def draw_breadth_tile(fig, font, rect, rows):
-    ax = tile(fig, rect, BG)
+def draw_breadth(fig, font, right, y, rows):
+    """Sectors up versus down, on the section's title line: counts and a proportional bar."""
     up, down = breadth(rows)
     total = max(len(rows), 1)
-    ax.text(0.5, 0.80, "板块涨跌", fontproperties=font(11.5), color=MUTED, ha="center", va="center")
-    ax.text(0.27, 0.47, str(up), fontproperties=font(24, bold=True), color=UP, ha="center", va="center")
-    ax.text(0.50, 0.47, ":", fontproperties=font(20, bold=True), color=MUTED, ha="center", va="center")
-    ax.text(0.73, 0.47, str(down), fontproperties=font(24, bold=True), color=DOWN, ha="center", va="center")
-    # Proportional bar: share of sectors up versus down.
-    ax.add_patch(mpatches.Rectangle((0.08, 0.10), 0.84, 0.10, color=RULE))
-    ax.add_patch(mpatches.Rectangle((0.08, 0.10), 0.84 * up / total, 0.10, color=UP))
-    ax.add_patch(mpatches.Rectangle((0.92 - 0.84 * down / total, 0.10), 0.84 * down / total, 0.10, color=DOWN))
+    fig.text(right, y, f"{down} 跌", fontproperties=font(12.5, bold=True), color=DOWN, ha="right", va="center")
+    fig.text(right - 0.050, y, f"{up} 涨", fontproperties=font(12.5, bold=True), color=UP, ha="right", va="center")
+
+    bar_width, bar_height = 0.130, 0.012
+    bar_left = right - 0.100 - bar_width
+    ax = fig.add_axes([bar_left, y - bar_height / 2, bar_width, bar_height])
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
+    ax.add_patch(mpatches.Rectangle((0, 0), 1, 1, color=RULE))
+    ax.add_patch(mpatches.Rectangle((0, 0), up / total, 1, color=UP))
+    ax.add_patch(mpatches.Rectangle((1 - down / total, 0), down / total, 1, color=DOWN))
 
 
 def draw_range(ax, font, value_format, price, low, high):
@@ -405,54 +410,69 @@ def draw_macro_tile(fig, font, rect, name, value_format, kind, quote, year_range
     ax.add_patch(mpatches.Rectangle((0, 0), 1, 0.03, color=color))
 
 
-def section_title(fig, font, y, title):
-    fig.text(0.03, y, title, fontproperties=font(15, bold=True), color=TEXT, ha="left", va="center")
-
-
 def grid(left, right, columns, gap):
     width = (right - left - gap * (columns - 1)) / columns
     return [left + i * (width + gap) for i in range(columns)], width
 
 
+# Card layout, in inches from the top. Indices get the most room; the eleven
+# sectors share a single row.
+CARD_WIDTH = 12.0
+CARD_HEIGHT = 9.00
+HEADER_Y = 0.36
+INDEX_TOP, INDEX_HEIGHT, INDEX_COLUMNS = 0.66, 1.62, 3
+SECTOR_TITLE_Y, SECTOR_TOP, SECTOR_HEIGHT = 4.40, 4.66, 0.86
+MACRO_TITLE_Y, MACRO_TOP, MACRO_HEIGHT = 5.86, 6.12, 2.08
+FOOTER_Y = 8.62
+TILE_GAP = 0.14
+
+
 def draw_card(quotes, intraday, ranges, session_date, out_path=OUTPUT_FILE, status=None):
     font = Fonts()
-    fig = plt.figure(figsize=(12, 10.4))
+    fig = plt.figure(figsize=(CARD_WIDTH, CARD_HEIGHT))
     fig.patch.set_facecolor(BG)
-    left, right, gap = 0.03, 0.97, 0.012
+    left, right, gap = 0.03, 0.97, TILE_GAP / CARD_WIDTH
+
+    def y(inches):
+        """Vertical position as a figure fraction, measured down from the top."""
+        return 1 - inches / CARD_HEIGHT
+
+    def box(x, top, width, height):
+        return [x, y(top + height), width, height / CARD_HEIGHT]
+
+    def section_title(top, title):
+        fig.text(left, y(top), title, fontproperties=font(15, bold=True), color=TEXT, ha="left", va="center")
 
     # Header
     header = format_date(session_date) + (f" · {status}" if status else "")
-    fig.text(left, 0.938, header, fontproperties=font(13), color=MUTED, ha="left", va="center")
+    fig.text(left, y(HEADER_Y), header, fontproperties=font(13), color=MUTED, ha="left", va="center")
 
-    # Indices: one tile each, with the session's intraday path
-    xs, width = grid(left, right, len(INDICES), gap)
-    for x, (symbol, name, ticker) in zip(xs, INDICES):
-        draw_index_tile(fig, font, [x, 0.675, width, 0.235], name, ticker,
+    # Indices: two rows of wide tiles, each with the session's intraday path
+    xs, width = grid(left, right, INDEX_COLUMNS, gap)
+    for i, (symbol, name, ticker) in enumerate(INDICES):
+        top = INDEX_TOP + (i // INDEX_COLUMNS) * (INDEX_HEIGHT + TILE_GAP)
+        draw_index_tile(fig, font, box(xs[i % INDEX_COLUMNS], top, width, INDEX_HEIGHT), name, ticker,
                         quotes.get(symbol), intraday.get(symbol) or [])
 
-    # Sectors: heat map, best to worst in reading order
+    # Sectors: one row of heat tiles, strongest first, with the breadth on the title line
     rows = sector_rows(quotes)
-    section_title(fig, font, 0.640, "板块表现")
-    xs, width = grid(left, right, 6, gap)
-    tile_height, top = 0.135, 0.612
-    cells = [(xs[i % 6], top - tile_height - (i // 6) * (tile_height + gap * 1.2)) for i in range(12)]
-    for (x, y), (name, pct) in zip(cells, rows):
-        draw_sector_tile(fig, font, [x, y, width, tile_height], name, pct)
-    draw_breadth_tile(fig, font, [*cells[11], width, tile_height], rows)
+    section_title(SECTOR_TITLE_Y, "板块表现")
+    draw_breadth(fig, font, right, y(SECTOR_TITLE_Y), rows)
+    xs, width = grid(left, right, len(SECTORS), gap * 0.6)
+    for x, (name, pct) in zip(xs, rows):
+        draw_sector_tile(fig, font, box(x, SECTOR_TOP, width, SECTOR_HEIGHT), name, pct)
 
     # Macro: rates, volatility, commodities, crypto
-    section_title(fig, font, 0.288, "利率 · 波动 · 商品 · 加密")
+    section_title(MACRO_TITLE_Y, "利率 · 波动 · 商品 · 加密")
     xs, width = grid(left, right, len(MACRO), gap)
     for x, (symbol, name, value_format, kind) in zip(xs, MACRO):
-        draw_macro_tile(fig, font, [x, 0.065, width, 0.195], name, value_format, kind,
+        draw_macro_tile(fig, font, box(x, MACRO_TOP, width, MACRO_HEIGHT), name, value_format, kind,
                         quotes.get(symbol), ranges.get(symbol))
 
-    fig.text(right, 0.028, "涨跌幅相对上一交易日收盘 · 板块为 SPDR 行业 ETF · 数据来源 Yahoo Finance",
+    fig.text(right, y(FOOTER_Y), "涨跌幅相对上一交易日收盘 · 板块为 SPDR 行业 ETF · 数据来源 Yahoo Finance",
              fontproperties=font(10), color=MUTED, ha="right", va="center")
 
-    # The header is a single small date line, so trim the unused strip above it.
-    width, height = fig.get_size_inches()
-    plt.savefig(out_path, dpi=110, facecolor=BG, bbox_inches=Bbox([[0, 0], [width, height * 0.968]]))
+    plt.savefig(out_path, dpi=110, facecolor=BG)
     plt.close(fig)
     return out_path
 

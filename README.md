@@ -27,7 +27,7 @@ In production since July 2026.
 | [`truth_social`](market_pulse/truth_social.py) | CNN's public Truth Social archive | Chinese translation + card image of the original post | Every 5 minutes |
 | [`fear_greed`](market_pulse/fear_greed.py) | CNN Fear & Greed Index, alternative.me Crypto Fear & Greed Index | One image with both gauges and their history, plus the change since last run | Scheduled |
 | [`earnings_calendar`](market_pulse/earnings_calendar.py) | Nasdaq's public calendar API, Yahoo Finance | One image of next week's most actively traded reporters, a column per day, with market cap and consensus EPS | Fridays after the US close |
-| [`market_close`](market_pulse/market_close.py) | Yahoo Finance | Chinese-language image: S&P 500, Nasdaq, Dow, Russell 2000 (IWM), semiconductors (SOXX), a heat map of the 11 sectors, VIX, 10-year yield, dollar index, gold, oil, bitcoin | Weekdays, 4:15 pm New York time |
+| [`market_close`](market_pulse/market_close.py) | Yahoo Finance | Chinese-language image: S&P 500, Nasdaq, Dow, equal-weight S&P 500 (RSP), Russell 2000 (IWM), semiconductors (SOXX), a heat row of the 11 sectors, VIX, 10-year yield, dollar index, gold, oil, bitcoin | Weekdays, 4:15 pm New York time |
 | [`ipo_calendar`](market_pulse/ipo_calendar.py) | Nasdaq's public calendar API | One image of the US IPOs expected to price from today through the end of next week, grouped by day | Fridays, right after the earnings calendar |
 | [`backfill`](market_pulse/backfill.py) | Wallstreetcn (all three channels) | Flash news missed during an outage window | Manual |
 
@@ -223,10 +223,10 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 
 - Triggered at 4:15 pm New York time on weekdays, right after the close. The scheduler job is defined in the `America/New_York` time zone, so the time stays correct across daylight saving changes.
 - Written for a Chinese-language channel: the image is labelled in Chinese and the message text is just the session date. Colours follow the US convention of green for up and red for down (`RED_UP` in the module flips it to the mainland Chinese convention). Every number also carries an arrow and a sign.
-- Five index tiles (S&P 500, Nasdaq, Dow, plus IWM for small caps and SOXX for semiconductors) show the move, the close and the session's intraday path against the previous close.
-- Sectors are tracked through the Select Sector SPDR ETFs and drawn as a heat map, strongest first, with colour depth proportional to the move.
+- Six wide index tiles in two rows (S&P 500, Nasdaq, Dow, then RSP for the equal-weight S&P 500, IWM for small caps and SOXX for semiconductors) show the move, the close and the session's intraday path against the previous close.
+- Sectors are tracked through the Select Sector SPDR ETFs and drawn as a single row of heat tiles, strongest first, with colour depth proportional to the move. The count of sectors up and down sits on the section's title line.
 - A row of macro tiles covers the VIX, the 10-year yield (move in basis points), the dollar index, gold, oil and bitcoin. Each tile also shows the 52-week low and high of its daily closes, with a marker for where the latest close sits between them.
-- Daily closes for all 22 symbols come from Yahoo Finance's chart endpoint in batches of 10; each move is the last daily close against the one before it.
+- Daily closes for all 23 symbols come from Yahoo Finance's chart endpoint in batches of 10; each move is the last daily close against the one before it.
 - The workflow installs `fonts-noto-cjk` for the Chinese labels; locally, Microsoft YaHei or PingFang is used.
 - Skips weekends and market holidays by checking that the newest S&P 500 bar belongs to today's session.
 - Stateless: nothing is written to the `state` branch.

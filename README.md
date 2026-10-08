@@ -223,7 +223,7 @@ Only `truth_social` uses `hashes` and `etag`. `seen_feargreed.json` instead stor
 
 - Triggered at 4:15 pm New York time on weekdays, right after the close. The scheduler job is defined in the `America/New_York` time zone, so the time stays correct across daylight saving changes.
 - Written for a Chinese-language channel: the image is labelled in Chinese and the message text is just the session date. Colours follow the US convention of green for up and red for down (`RED_UP` in the module flips it to the mainland Chinese convention). Every number also carries an arrow and a sign.
-- Six wide index tiles in two rows (S&P 500, Nasdaq, Dow, then RSP for the equal-weight S&P 500, IWM for small caps and SOXX for semiconductors) show the move, the close and the session's intraday path against the previous close.
+- Six wide index tiles in two rows (S&P 500, Nasdaq and Dow, and beneath each the ETF it is read against: RSP for the equal-weight S&P 500, SOXX for semiconductors, IWM for small caps) show the move, the close and the session's intraday path against the previous close.
 - Sectors are tracked through the Select Sector SPDR ETFs and drawn as a single row of heat tiles, strongest first, with colour depth proportional to the move. The count of sectors up and down sits on the section's title line.
 - A row of macro tiles covers the VIX, the 10-year yield (move in basis points), the dollar index, gold, oil and bitcoin. Each tile also shows the 52-week low and high of its daily closes, with a marker for where the latest close sits between them.
 - Daily closes for all 23 symbols come from Yahoo Finance's chart endpoint in batches of 10; each move is the last daily close against the one before it.

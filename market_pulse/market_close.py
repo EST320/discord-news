@@ -52,14 +52,17 @@ OUTPUT_FILE = Path("market_close.png")
 # after the close today's bar is ~8 hours old and the previous session's is 32+.
 MAX_BAR_AGE_SECONDS = 20 * 3600
 
-# (symbol, Chinese name, ticker shown on the tile)
+# (symbol, Chinese name, ticker shown on the tile). Drawn three to a row, so
+# each ETF in the second row sits under the index it is read against:
+# equal weight under the S&P 500, semiconductors under the Nasdaq, small
+# caps under the Dow.
 INDICES = [
     ("^GSPC", "标普500", "S&P 500"),
     ("^IXIC", "纳斯达克", "NASDAQ"),
     ("^DJI", "道琼斯", "DOW"),
     ("RSP", "标普等权", "RSP"),
-    ("IWM", "罗素2000", "IWM"),
     ("SOXX", "半导体", "SOXX"),
+    ("IWM", "罗素2000", "IWM"),
 ]
 
 # Sectors are tracked through the Select Sector SPDR ETFs.

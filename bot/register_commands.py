@@ -2,7 +2,6 @@
 
 Usage:
     DISCORD_APPLICATION_ID=... DISCORD_BOT_TOKEN=... python bot/register_commands.py
-or run the "Register Discord Commands" workflow, which reads both from repository secrets.
 
 Commands are registered globally, so they appear in every server the bot is in.
 """

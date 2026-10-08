@@ -65,7 +65,6 @@ market-pulse-discord/
 │   ├── market-close.yml                      # Daily US market close summary
 │   ├── backfill.yml                          # Manual backfill
 │   ├── market-now.yml                        # /market slash command: summary on demand
-│   ├── register-commands.yml                 # One-off: register the slash commands
 │   └── tests.yml                             # Unit tests on code changes
 ├── market_pulse/
 │   ├── wallstreetcn.py                       # One module, three channels
@@ -167,7 +166,7 @@ The reply takes roughly half a minute to a minute, almost all of it the runner s
 Setup:
 
 1. Create an application in the Discord Developer Portal, add a bot to it, and invite it to the server with the `applications.commands` scope.
-2. Add the repository secrets `DISCORD_APPLICATION_ID` and `DISCORD_BOT_TOKEN`, then run the **Register Discord Commands** workflow once.
+2. Register the command once by running `bot/register_commands.py` with `DISCORD_APPLICATION_ID` and `DISCORD_BOT_TOKEN` in the environment. The bot token is needed only for this step and is not stored anywhere in the project.
 3. Create a Cloudflare Worker from this repository (Workers & Pages → Create → import a repository) with **`bot` as the root directory** and preview builds turned off; `bot/wrangler.toml` supplies the rest, and later pushes redeploy it. Then add its secrets `DISCORD_PUBLIC_KEY` and `GITHUB_TOKEN` (a fine-grained token with Actions read and write on this repository), and optionally a text variable `ALLOWED_GUILD_ID` to restrict the command to one server.
 4. Put the Worker's URL in the application's **Interactions Endpoint URL**. Discord checks the signature handling before accepting it.
 
@@ -284,7 +283,6 @@ git worktree add state state
 | `DISCORD_WEBHOOK_URL_MARKET` | Market close channel. Optional: shares the Fear & Greed channel when unset |
 | `DISCORD_WEBHOOK_URL_IPO` | IPO calendar channel. Optional: shares the earnings calendar channel when unset |
 | `DEEPL_API_KEY` | DeepL translation |
-| `DISCORD_APPLICATION_ID`, `DISCORD_BOT_TOKEN` | Only for registering the `/market` slash command |
 
 ## Known limitations and roadmap
 
